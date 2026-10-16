@@ -13,8 +13,10 @@ on:
 permissions:
   contents: read
 
+# github.workflow is the caller's name when docker-publish.yml calls this, so
+# the standalone run and the publish run's CI don't cancel each other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
