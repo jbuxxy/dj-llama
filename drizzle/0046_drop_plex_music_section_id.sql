@@ -1,0 +1,1 @@
+ALTER TABLE "settings" DROP COLUMN "plex_music_section_id";

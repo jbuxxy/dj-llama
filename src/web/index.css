@@ -1,0 +1,101 @@
+@import "tailwindcss";
+
+/* Compact text sizes for badges, pills, labels */
+@utility text-micro {
+  font-size: 0.625rem; /* 10px */
+}
+@utility text-micro-sm {
+  font-size: 0.5625rem; /* 9px */
+}
+@utility text-micro-lg {
+  font-size: 0.6875rem; /* 11px */
+}
+
+@theme {
+  --color-bg: #0f1412;
+  --color-surface: #1a231e;
+  --color-border: #2a3a30;
+  --color-accent: #0cc75c;
+  --color-accent-fg: #0f1412;
+  --color-approve: #4fd47e;
+  --color-reject: #e0605e;
+  --color-info: #6fc7d4;
+  --color-warning: #d4b06a;
+  --color-text: #e6f2ea;
+  --color-muted: #8fa79a;
+
+  /* Service brand colors -- overridable per theme */
+  --color-svc-spotify: #1db954;
+  --color-svc-youtube: #ff0000;
+  --color-svc-apple: #fc3c44;
+  --color-svc-deezer: #a238ff;
+  --color-svc-soundcloud: #ff5500;
+  --color-svc-unknown: #6b7084;
+  --color-svc-musicbrainz: #d4a574;
+  --color-svc-ai: #9b7ab8;
+  --color-svc-webhook: #60a5fa;
+}
+
+/* DJ Llama - Dark (project signature; near-black slate + headphone green accent) */
+[data-theme="djllama-dark"] {
+  --color-bg: #0f1412;
+  --color-surface: #1a231e;
+  --color-border: #2a3a30;
+  --color-accent: #0cc75c;
+  --color-accent-fg: #0f1412;
+  --color-approve: #4fd47e;
+  --color-reject: #e0605e;
+  --color-info: #6fc7d4;
+  --color-warning: #d4b06a;
+  --color-text: #e6f2ea;
+  --color-muted: #8fa79a;
+}
+
+/* DJ Llama - Light */
+[data-theme="djllama-light"] {
+  --color-bg: #f4f9f5;
+  --color-surface: #e6f1e8;
+  --color-border: #c3d9c9;
+  --color-accent: #0a9c49;
+  --color-accent-fg: #ffffff;
+  --color-approve: #2f8a52;
+  --color-reject: #a13d3d;
+  --color-info: #2f7a86;
+  --color-warning: #a8702d;
+  --color-text: #12241a;
+  --color-muted: #5c7268;
+}
+
+/* Self-hosted (no external font CDN) -- OFL licensed, see /fonts/OFL.txt */
+@font-face {
+  font-family: "Bebas Neue";
+  src: url("/fonts/BebasNeue-Regular.ttf") format("truetype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+@utility font-display {
+  font-family: "Bebas Neue", system-ui, sans-serif;
+  letter-spacing: 0.03em;
+}
+
+body {
+  background-color: var(--color-bg);
+  color: var(--color-text);
+  font-family: system-ui, -apple-system, sans-serif;
+  /* +2px over the raw safe-area-inset-top: iOS's status-bar blur/vignette
+     reads a sliver of whatever sits right at that boundary, so content
+     flush against it still shows a soft color bleed at rest (scrolled to
+     top) even with the inset itself respected exactly. A couple extra
+     pixels of clearance keeps page content out of that sampled sliver. */
+  padding: calc(env(safe-area-inset-top) + 2px) env(safe-area-inset-right)
+    env(safe-area-inset-bottom) env(safe-area-inset-left);
+}
+
+/* Prevent pull-to-refresh interfering with swipe gestures in standalone mode */
+@media (display-mode: standalone) {
+  body {
+    overscroll-behavior-y: contain;
+  }
+}

@@ -1,0 +1,44 @@
+# ===========================
+# Project
+# ===========================
+node_modules/
+dist/
+coverage/
+.vitest-cache/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+
+# Bun is the package manager for this repo; keep alternate lockfiles local.
+package-lock.json
+pnpm-lock.yaml
+yarn.lock
+
+# ===========================
+# Local
+# ===========================
+AGENTS.md
+CLAUDE.md
+/ROADMAP.md
+PLAN.md
+SECURITY-AUDIT.md
+.claude/
+.codex/
+.opencode/
+.cursor/
+.worktrees/
+.playwright-mcp/
+docs/local/
+.commandcode/
+.planning/
+mempalace.yaml
+entities.json
+/data/
+
+# Compose secrets -- example files tracked, real values ignored
+deploy/docker/secrets/*
+!deploy/docker/secrets/*.example
+/plans/

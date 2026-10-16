@@ -1,0 +1,364 @@
+import PQueue from 'p-queue'
+import { type createMusicBrainzClient, getMusicBrainzQueueDepth } from '@/core/clients/musicbrainz'
+import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
+import type { JobRecorder, JobType } from '@/core/jobs/types'
+import { conciseErrMsg } from '@/core/validation'
+import { type ReconciledAlbum, reconcileAlbumsForArtist } from './album-reconciler'
+import { normalizeAlbumTitle } from './normalize'
+import { type ReconciledArtist, type ReconcilerContext, reconcileArtist } from './reconciler'
+import type { LibrarySource } from './sources/types'
+import { emptyLibrarySyncCounts, type LibrarySyncStore } from './store'
+
+const LIBRARY_SYNC_JOB_TYPE: JobType = 'library_sync'
+
+/** Sentinel substring used by callers to detect "source not configured" failures
+ *  and trigger fallback retry logic. Keep in sync with syncSpecificSource error msg. */
+export const SOURCE_NOT_CONFIGURED_ERROR = 'not configured'
+
+type MBClient = Pick<
+  ReturnType<typeof createMusicBrainzClient>,
+  'searchArtist' | 'getReleaseGroups' | 'searchReleaseGroupByTitle'
+>
+
+export type SourceSyncResult =
+  | {
+      source: string
+      status: 'completed'
+      counts: ReconcilerContext['counts']
+    }
+  | {
+      source: string
+      status: 'skipped_fresh'
+      counts: ReconcilerContext['counts'] | null
+    }
+  | {
+      source: string
+      status: 'failed'
+      error: string
+    }
+
+export type SyncSummary = {
+  userId: number | null
+  results: SourceSyncResult[]
+}
+
+export type SyncOptions = {
+  force?: boolean
+  onProgress?: (msg: string, itemProgress?: { current: number; total: number }) => void
+}
+
+export type SyncOrchestratorDeps = {
+  store: LibrarySyncStore
+  recorder: JobRecorder
+  mbClient: MBClient
+  buildPerUserSources: (userId: number) => Promise<LibrarySource[]>
+  buildGlobalSources: () => Promise<LibrarySource[]>
+  /** Stale threshold in hours; matches settings.librarySyncIntervalHours */
+  staleHours: number
+}
+
+function deduplicateAlbums(
+  albums: ReconciledAlbum[],
+  artists: Array<{ sourceArtistId: string; mbid: string }>,
+): ReconciledAlbum[] {
+  const artistMbids = new Map(artists.map((artist) => [artist.sourceArtistId, artist.mbid]))
+  const bySourceAlbumId = new Map<string, ReconciledAlbum>()
+
+  for (const album of albums) {
+    const existing = bySourceAlbumId.get(album.sourceAlbumId)
+    if (!existing) {
+      bySourceAlbumId.set(album.sourceAlbumId, album)
+      continue
+    }
+
+    const albumMatchesSourceArtist = artistMbids.get(album.sourceArtistId) === album.artistMbid
+    const existingMatchesSourceArtist =
+      artistMbids.get(existing.sourceArtistId) === existing.artistMbid
+    if (
+      (albumMatchesSourceArtist && !existingMatchesSourceArtist) ||
+      (albumMatchesSourceArtist === existingMatchesSourceArtist &&
+        album.artistMbid.localeCompare(existing.artistMbid) < 0)
+    ) {
+      bySourceAlbumId.set(album.sourceAlbumId, album)
+    }
+  }
+
+  return [...bySourceAlbumId.values()].sort((a, b) =>
+    a.sourceAlbumId.localeCompare(b.sourceAlbumId),
+  )
+}
+
+export function createSyncOrchestrator(deps: SyncOrchestratorDeps) {
+  const inFlight = new Map<string, Promise<SourceSyncResult>>()
+
+  function isStale(lastCompleted: Date | null): boolean {
+    if (!lastCompleted) return true
+    const ageMs = Date.now() - lastCompleted.getTime()
+    return ageMs > deps.staleHours * 60 * 60 * 1000
+  }
+
+  async function syncSource(
+    source: LibrarySource,
+    userId: number | null,
+    options?: SyncOptions,
+  ): Promise<SourceSyncResult> {
+    const key = `${userId ?? 'global'}:${source.id}`
+    const existing = inFlight.get(key)
+    if (existing) return existing
+
+    const promise = doSync(source, userId, options).finally(() => {
+      inFlight.delete(key)
+    })
+    inFlight.set(key, promise)
+    return promise
+  }
+
+  async function doSync(
+    source: LibrarySource,
+    userId: number | null,
+    options?: SyncOptions,
+  ): Promise<SourceSyncResult> {
+    if (!options?.force) {
+      const state = await deps.store.getLibrarySyncState(userId, source.id)
+      if (state?.lastSyncCompletedAt && !isStale(state.lastSyncCompletedAt)) {
+        return { source: source.id, status: 'skipped_fresh', counts: state.lastSyncCounts }
+      }
+    }
+
+    let jobId: number | null = null
+    try {
+      jobId = await deps.recorder.start({
+        type: LIBRARY_SYNC_JOB_TYPE,
+        userId: userId ?? undefined,
+        metadata: { source: source.id },
+      })
+
+      await deps.store.upsertLibrarySyncState(userId, source.id, {
+        lastSyncStartedAt: new Date(),
+        lastSyncStatus: 'running',
+        lastSyncError: null,
+      })
+
+      options?.onProgress?.(`Syncing ${source.name}...`)
+      const rawArtists = await source.listArtists()
+
+      const overrides = userId != null ? await deps.store.getAllOverrides(userId) : new Map()
+      const knownMbids =
+        userId != null ? await deps.store.getKnownMbidsForUser(userId) : new Set<string>()
+      const counts = emptyLibrarySyncCounts()
+      const ctx: ReconcilerContext = {
+        userId,
+        overrides,
+        knownMbids,
+        mbClient: deps.mbClient,
+        cacheLookup: (nameNormalized) =>
+          userId != null
+            ? deps.store.findReconciledByNormalizedName(userId, nameNormalized)
+            : Promise.resolve([]),
+        counts,
+      }
+
+      const reconciled: ReconciledArtist[] = []
+      const totalArtists = rawArtists.length
+      // Emit ~50 updates across the run regardless of library size, so a
+      // library of 50 artists and one of 5000 both get a smoothly moving bar
+      // instead of either silence or an SSE flood.
+      const progressStep = Math.max(1, Math.floor(totalArtists / 50))
+      // MusicBrainz's shared rate gate (concurrency 1, ~1 req/s) is shared by
+      // every subsystem -- a concurrent library sync or discovery-mode run
+      // can queue this one behind it for minutes with nothing to report in
+      // between. Surface queue depth whenever it's non-trivial so the bar
+      // reads as "busy" instead of "stuck", starting before the first item
+      // even completes.
+      const BACKLOG_THRESHOLD = 5
+      const initialQueueDepth = getMusicBrainzQueueDepth()
+      if (totalArtists > 0 && initialQueueDepth >= BACKLOG_THRESHOLD) {
+        options?.onProgress?.(`Waiting on MusicBrainz (~${initialQueueDepth} requests ahead)...`, {
+          current: 0,
+          total: totalArtists,
+        })
+      }
+      for (let i = 0; i < rawArtists.length; i++) {
+        const artist = rawArtists[i]
+        if (!artist) continue
+        reconciled.push(await reconcileArtist(artist, source.id, ctx))
+        const current = i + 1
+        if (current === totalArtists || current % progressStep === 0) {
+          const base = `Syncing ${source.name}... (${current}/${totalArtists})`
+          const queueDepth = getMusicBrainzQueueDepth()
+          const message =
+            queueDepth >= BACKLOG_THRESHOLD
+              ? `${base} (MusicBrainz busy: ~${queueDepth} ahead)`
+              : base
+          options?.onProgress?.(message, { current, total: totalArtists })
+        }
+      }
+
+      let writtenCounts: ReturnType<typeof emptyLibrarySyncCounts>
+      const listAlbums = source.listAlbums
+      if (source.capabilities.includes('listAlbums') && listAlbums) {
+        const albumQueue = new PQueue({ concurrency: 3 })
+        const matchedArtists = reconciled.filter(
+          (artist): artist is (typeof reconciled)[number] & { mbid: string } =>
+            artist.mbid !== null,
+        )
+        const albumRows: ReconciledAlbum[] = []
+        const albumTasks: Promise<void>[] = []
+
+        // Re-resolving every album against MusicBrainz on every run (one
+        // rate-limited getReleaseGroups per artist, ~1 req/s) made a sync of
+        // a ~1,700-album library take ~50 minutes, so "in library" status
+        // lagged new media by up to an hour. An album whose title and artist
+        // are unchanged since the last snapshot and that already matched
+        // reuses that match; only new, changed, or still-unmatched albums
+        // go to MusicBrainz.
+        const previousAlbums = new Map(
+          (await deps.store.listReconciledAlbums(userId, source.id)).map(
+            (a) => [a.sourceAlbumId, a] as const,
+          ),
+        )
+
+        for (const artist of matchedArtists) {
+          albumTasks.push(
+            albumQueue.add(async () => {
+              const rawAlbums = await listAlbums(artist.sourceArtistId)
+              const toResolve: typeof rawAlbums = []
+              for (const raw of rawAlbums) {
+                const prev = previousAlbums.get(raw.sourceAlbumId)
+                if (
+                  prev?.albumMbid &&
+                  prev.artistMbid === artist.mbid &&
+                  prev.titleNormalized === normalizeAlbumTitle(raw.title)
+                ) {
+                  albumRows.push({ ...prev, sourceArtistId: raw.sourceArtistId, title: raw.title })
+                } else {
+                  toResolve.push(raw)
+                }
+              }
+              if (toResolve.length === 0) return
+              const reconciledAlbums = await reconcileAlbumsForArtist(artist.mbid, toResolve, {
+                mbClient: deps.mbClient,
+                onMbError: () => {
+                  counts.mbApiCallsFailed = (counts.mbApiCallsFailed ?? 0) + 1
+                },
+              })
+              albumRows.push(...reconciledAlbums)
+            }),
+          )
+        }
+
+        // Per-artist album tasks fail soft: any rejected task is logged and
+        // counted, but the sync still completes. MB-domain errors (5xx,
+        // timeouts) are already caught inside reconcileAlbumsForArtist; this
+        // outer catch protects against unexpected failures from the source's
+        // listAlbums() implementation.
+        const albumResults = await Promise.allSettled(albumTasks)
+        await albumQueue.onIdle()
+        for (const result of albumResults) {
+          if (result.status === 'rejected') {
+            counts.mbApiCallsFailed = (counts.mbApiCallsFailed ?? 0) + 1
+            console.warn(
+              `[library-sync] album task failed during ${source.id} sync; continuing: ${
+                result.reason instanceof Error ? result.reason.message : String(result.reason)
+              }`,
+            )
+          }
+        }
+
+        const uniqueAlbumRows = deduplicateAlbums(albumRows, matchedArtists)
+
+        writtenCounts = await deps.store.replaceLibrarySnapshot(
+          userId,
+          source.id,
+          reconciled,
+          uniqueAlbumRows,
+        )
+      } else {
+        writtenCounts = await deps.store.replaceLibraryArtists(userId, source.id, reconciled)
+      }
+      // Merge writer counts (tally pass) with reconciler counts (cacheHits, mbApiCalls)
+      const merged = {
+        ...writtenCounts,
+        cacheHits: counts.cacheHits,
+        mbApiCalls: counts.mbApiCalls,
+        mbApiCallsFailed: counts.mbApiCallsFailed ?? 0,
+        albumsSynced: writtenCounts.albumsSynced ?? 0,
+      }
+
+      await deps.store.upsertLibrarySyncState(userId, source.id, {
+        lastSyncCompletedAt: new Date(),
+        lastSyncStatus: 'completed',
+        lastSyncError: null,
+        lastSyncCounts: merged,
+      })
+      await deps.recorder.complete(jobId, { metadata: { counts: merged } })
+      return { source: source.id, status: 'completed', counts: merged }
+    } catch (err: unknown) {
+      const error = conciseErrMsg(err)
+      // The state-update itself can fail if the DB is the source of the original error.
+      // Swallow secondary failures so they don't escape doSync.
+      try {
+        await deps.store.upsertLibrarySyncState(userId, source.id, {
+          lastSyncStatus: 'failed',
+          lastSyncError: error,
+        })
+      } catch {
+        // best-effort
+      }
+      if (jobId !== null) {
+        await recordFailureSafely(deps.recorder, jobId, error)
+      }
+      return { source: source.id, status: 'failed', error }
+    }
+  }
+
+  async function runSourcesIsolated(
+    sources: LibrarySource[],
+    userId: number | null,
+    options?: SyncOptions,
+  ): Promise<SourceSyncResult[]> {
+    const ordered = [...sources].sort((a, b) => {
+      if (a.mbidQuality === b.mbidQuality) return 0
+      return a.mbidQuality === 'high' ? -1 : 1
+    })
+    const results: SourceSyncResult[] = []
+    for (const src of ordered) {
+      results.push(await syncSource(src, userId, options))
+    }
+    return results
+  }
+
+  return {
+    async syncGlobal(options?: SyncOptions): Promise<SyncSummary> {
+      const sources = await deps.buildGlobalSources()
+      const results = await runSourcesIsolated(sources, null, options)
+      return { userId: null, results }
+    },
+
+    async syncForUser(userId: number, options?: SyncOptions): Promise<SyncSummary> {
+      const sources = await deps.buildPerUserSources(userId)
+      const results = await runSourcesIsolated(sources, userId, options)
+      return { userId, results }
+    },
+
+    async syncSpecificSource(
+      userId: number | null,
+      sourceId: string,
+      options?: SyncOptions,
+    ): Promise<SourceSyncResult> {
+      const sources =
+        userId === null ? await deps.buildGlobalSources() : await deps.buildPerUserSources(userId)
+      const src = sources.find((s) => s.id === sourceId)
+      if (!src) {
+        return {
+          source: sourceId,
+          status: 'failed',
+          error: `Source '${sourceId}' ${SOURCE_NOT_CONFIGURED_ERROR}`,
+        }
+      }
+      return syncSource(src, userId, options)
+    },
+  }
+}
+
+export type SyncOrchestrator = ReturnType<typeof createSyncOrchestrator>

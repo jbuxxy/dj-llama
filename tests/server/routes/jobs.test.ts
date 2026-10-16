@@ -1,0 +1,190 @@
+// @vitest-environment node
+
+import { Hono } from 'hono'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { jobRoutes } from '@/server/routes/jobs'
+import type { HonoEnv } from '@/server/types'
+
+// Mock getSession so auth middleware doesn't block us
+vi.mock('@/core/sessions', () => ({
+  getSession: vi.fn().mockResolvedValue({
+    userId: 1,
+    token: 'tok',
+    expiresAt: new Date(Date.now() + 86400000),
+  }),
+}))
+
+function makeMockDeps(overrides: Record<string, unknown> = {}) {
+  return {
+    getUserById: vi.fn().mockResolvedValue({ id: 1, isAdmin: true }),
+    scheduler: { nextRun: null as Date | null },
+    jobQueries: {
+      listJobs: vi.fn().mockResolvedValue({ items: [], total: 0 }),
+      getJobById: vi.fn().mockResolvedValue(null),
+      getJobHealth: vi.fn().mockResolvedValue({
+        discovery: {
+          status: 'ok',
+          running: false,
+          lastSuccessAt: null,
+          lastProblem: null,
+          nextRunAt: null,
+        },
+        playlists: {
+          status: 'ok',
+          running: false,
+          lastSuccessAt: null,
+          lastProblem: null,
+          recentRuns: 0,
+          recentFailures: 0,
+        },
+        librarySync: { status: 'ok', running: false, lastSuccessAt: null, lastProblem: null },
+        sources: [],
+      }),
+    },
+    ...overrides,
+  }
+}
+
+function createApp(deps: ReturnType<typeof makeMockDeps>) {
+  const app = new Hono<HonoEnv>()
+  // Simulate auth middleware setting userId
+  app.use('*', async (c, next) => {
+    c.set('userId', 1)
+    return next()
+  })
+  app.route('/', jobRoutes(deps as never))
+  return app
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+})
+
+describe('GET /api/v1/jobs', () => {
+  it('returns paginated job list', async () => {
+    const deps = makeMockDeps()
+    deps.jobQueries.listJobs.mockResolvedValue({
+      items: [{ id: 1, type: 'pipeline', status: 'completed' }],
+      total: 1,
+    })
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.items).toHaveLength(1)
+    expect(body.total).toBe(1)
+  })
+
+  it('passes filter params to listJobs', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    await app.request('/api/v1/jobs?type=pipeline&status=failed&limit=10&offset=5')
+    expect(deps.jobQueries.listJobs).toHaveBeenCalledWith({
+      type: 'pipeline',
+      status: 'failed',
+      limit: 10,
+      offset: 5,
+    })
+  })
+
+  it('rejects limit above 100', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs?limit=999')
+    expect(res.status).toBe(400)
+    expect(deps.jobQueries.listJobs).not.toHaveBeenCalled()
+  })
+
+  it('rejects negative limit / offset', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs?limit=-10&offset=-5')
+    expect(res.status).toBe(400)
+    expect(deps.jobQueries.listJobs).not.toHaveBeenCalled()
+  })
+
+  it('accepts library_sync as a valid job type filter', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    await app.request('/api/v1/jobs?type=library_sync')
+    expect(deps.jobQueries.listJobs).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'library_sync' }),
+    )
+  })
+
+  it('returns 400 for an invalid type filter', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs?type=bogus')
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 for an invalid status filter', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs?status=bogus')
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 403 for non-admin', async () => {
+    const deps = makeMockDeps({
+      getUserById: vi.fn().mockResolvedValue({ id: 2, isAdmin: false }),
+    })
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs')
+    expect(res.status).toBe(403)
+    expect(res.headers.get('content-type')).toContain('application/problem+json')
+    await expect(res.json()).resolves.toMatchObject({
+      type: '/problems/admin-required',
+      title: 'Admin access required',
+      status: 403,
+      code: 'common.adminAccessRequired',
+    })
+  })
+})
+
+describe('GET /api/v1/jobs/health', () => {
+  it('returns health summary', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs/health')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.discovery).toBeDefined()
+    expect(body.sources).toBeDefined()
+  })
+
+  it('passes scheduler.nextRun to getJobHealth', async () => {
+    const nextRun = new Date('2026-04-06T00:00:00Z')
+    const deps = makeMockDeps({ scheduler: { nextRun } })
+    const app = createApp(deps)
+    await app.request('/api/v1/jobs/health')
+    expect(deps.jobQueries.getJobHealth).toHaveBeenCalledWith(nextRun)
+  })
+})
+
+describe('GET /api/v1/jobs/:id', () => {
+  it('returns 404 for unknown job', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs/999')
+    expect(res.status).toBe(404)
+  })
+
+  it('returns job when found', async () => {
+    const deps = makeMockDeps()
+    deps.jobQueries.getJobById.mockResolvedValue({ id: 1, type: 'pipeline', status: 'completed' })
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs/1')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.id).toBe(1)
+  })
+
+  it('returns 400 for non-numeric id', async () => {
+    const deps = makeMockDeps()
+    const app = createApp(deps)
+    const res = await app.request('/api/v1/jobs/abc')
+    expect(res.status).toBe(400)
+  })
+})

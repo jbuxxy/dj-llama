@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "lastfm_api_key" text;

@@ -1,0 +1,197 @@
+import { Music, SkipBack, SkipForward, Volume2, X } from 'lucide-react'
+import { useEffect, useRef } from 'react'
+import type { PreviewSource } from '@/web/hooks/use-preview'
+import { type SpotifyPlaybackCommand, useSpotifyEmbed } from '@/web/hooks/use-spotify-embed'
+
+const SOURCE_LABELS: Record<PreviewSource['type'], string> = {
+  'spotify-embed': 'Spotify',
+  'deezer-audio': 'Deezer',
+  'youtube-embed': 'YouTube',
+}
+
+type Props = {
+  playing: boolean
+  artistName: string | null
+  source: PreviewSource | null
+  loading: boolean
+  onStop: () => void
+  spotify: {
+    command: SpotifyPlaybackCommand
+    onPlaybackStarted: () => void
+    onPlaybackPaused: () => void
+    onPlaybackUnavailable: () => void
+    onPlaybackEnded: () => void
+  }
+  volume: number
+  onVolumeChange: (value: number) => void
+  queue?: {
+    index: number
+    count: number
+    onNext: () => void
+    onPrevious: () => void
+  }
+}
+
+/**
+ * Global mini-player bar fixed to the bottom of the viewport.
+ * On mobile it sits above the 56px bottom nav (bottom-14); on md+ it sits at
+ * bottom-0. Only renders when a preview is active (loading or playing).
+ */
+export function PreviewPlayer({
+  playing,
+  artistName,
+  source,
+  loading,
+  onStop,
+  spotify,
+  volume,
+  onVolumeChange,
+  queue,
+}: Props) {
+  const spotifyUrl = source?.type === 'spotify-embed' ? source.url : null
+  const queueActive = Boolean(queue)
+  const reportedUnavailableUrlRef = useRef<string | null>(null)
+  const { hostRef: spotifyHostRef, failed: spotifyControllerFailed } = useSpotifyEmbed({
+    url: spotifyUrl,
+    keepAlive: queueActive,
+    command: spotify.command,
+    onPlaybackStarted: spotify.onPlaybackStarted,
+    onPlaybackPaused: spotify.onPlaybackPaused,
+    onPlaybackEnded: spotify.onPlaybackEnded,
+  })
+  useEffect(() => {
+    if (!spotifyControllerFailed) {
+      reportedUnavailableUrlRef.current = null
+    } else if (queueActive && spotifyUrl && reportedUnavailableUrlRef.current !== spotifyUrl) {
+      reportedUnavailableUrlRef.current = spotifyUrl
+      spotify.onPlaybackUnavailable()
+    }
+  }, [queueActive, spotifyControllerFailed, spotifyUrl, spotify.onPlaybackUnavailable])
+  if (!source && !loading && !queue) return null
+
+  const sourceLabel = source ? SOURCE_LABELS[source.type] : null
+  const showYouTubeIframe = playing && source?.type === 'youtube-embed'
+  const showSpotifyHost = source?.type === 'spotify-embed' || queueActive
+  const spotifyFallbackUrl =
+    spotifyControllerFailed && !queueActive && source?.type === 'spotify-embed'
+      ? source.embedUrl
+      : null
+  // Volume is only controllable for the HTML5 Deezer audio element; the
+  // Spotify/YouTube embeds run in cross-origin iframes with their own controls.
+  const showVolume = source?.type === 'deezer-audio'
+
+  return (
+    <section
+      className="fixed bottom-14 md:bottom-0 left-0 right-0 z-50 bg-surface border-t border-border shadow-lg"
+      aria-label="Preview player"
+    >
+      <div className="max-w-3xl mx-auto px-4 py-2">
+        <div className="flex items-center gap-3">
+          <Music size={16} className="text-muted shrink-0" aria-hidden="true" />
+
+          <div className="flex-1 min-w-0" aria-live="polite">
+            {loading && !artistName ? (
+              <span className="text-sm text-muted">Loading preview...</span>
+            ) : (
+              <div className="flex items-center gap-2 min-w-0">
+                {artistName && (
+                  <span className="text-sm text-text font-medium truncate">{artistName}</span>
+                )}
+                {loading && <span className="text-xs text-muted shrink-0">Loading...</span>}
+                {!loading && sourceLabel && (
+                  <span className="text-xs text-muted uppercase shrink-0">{sourceLabel}</span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {queue && (
+            <div className="shrink-0 flex items-center gap-1">
+              <button
+                type="button"
+                onClick={queue.onPrevious}
+                disabled={queue.index === 0}
+                className="p-1.5 rounded text-muted hover:text-text hover:bg-bg/50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                aria-label="Previous preview"
+                title="Previous preview"
+              >
+                <SkipBack size={14} aria-hidden="true" />
+              </button>
+              <span className="text-xs text-muted tabular-nums whitespace-nowrap">
+                {`${queue.index + 1} of ${queue.count}`}
+              </span>
+              <button
+                type="button"
+                onClick={queue.onNext}
+                className="p-1.5 rounded text-muted hover:text-text hover:bg-bg/50 transition-colors"
+                aria-label="Next preview"
+                title="Next preview"
+              >
+                <SkipForward size={14} aria-hidden="true" />
+              </button>
+            </div>
+          )}
+
+          {showVolume && (
+            <div className="shrink-0 flex items-center gap-1.5">
+              <Volume2 size={14} className="text-muted" aria-hidden="true" />
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.05}
+                value={volume}
+                onChange={(e) => onVolumeChange(Number.parseFloat(e.target.value))}
+                className="w-16 sm:w-24 accent-accent cursor-pointer"
+                aria-label="Volume"
+              />
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={onStop}
+            className="shrink-0 flex items-center gap-1 px-2 py-1 rounded text-sm text-muted hover:text-text hover:bg-bg/50 transition-colors"
+            aria-label="Close preview"
+          >
+            <X size={14} aria-hidden="true" />
+            <span className="hidden sm:inline">Close</span>
+          </button>
+        </div>
+
+        {showSpotifyHost && (
+          <div
+            ref={spotifyHostRef}
+            className={`mt-2 rounded overflow-hidden ${spotifyUrl && !spotifyControllerFailed ? '' : 'hidden'}`}
+          />
+        )}
+
+        {spotifyFallbackUrl && (
+          <iframe
+            src={spotifyFallbackUrl}
+            height={80}
+            width="100%"
+            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+            loading="lazy"
+            title={artistName ?? sourceLabel ?? 'Loading preview...'}
+            className="mt-2 rounded"
+          />
+        )}
+
+        {showYouTubeIframe && (
+          <div className="mt-2">
+            <iframe
+              src={source.embedUrl}
+              height={80}
+              width="100%"
+              allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+              loading="lazy"
+              title={artistName ?? sourceLabel ?? 'Loading preview...'}
+              className="rounded"
+            />
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}

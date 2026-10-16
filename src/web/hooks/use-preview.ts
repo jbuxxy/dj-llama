@@ -1,0 +1,324 @@
+import { useCallback, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { clampVolume, readStoredVolume, writeStoredVolume } from '../lib/preview-volume'
+import type { SpotifyPlaybackCommand } from './use-spotify-embed'
+
+export type PreviewSource = {
+  type: 'spotify-embed' | 'deezer-audio' | 'youtube-embed'
+  url: string
+  embedUrl: string
+}
+
+export type PlayOutcome = 'started' | 'paused' | 'resumed' | 'no-source' | 'blocked'
+
+type PreviewState = {
+  playing: boolean
+  artistMbid: string | null
+  artistName: string | null
+  source: PreviewSource | null
+  loading: boolean
+  error: string | null
+}
+
+const INITIAL_STATE: PreviewState = {
+  playing: false,
+  artistMbid: null,
+  artistName: null,
+  source: null,
+  loading: false,
+  error: null,
+}
+
+// Source resolvers
+
+function resolveSpotifyEmbed(spotifyUrl: string): PreviewSource | null {
+  let parsed: URL
+  try {
+    parsed = new URL(spotifyUrl)
+  } catch {
+    return null
+  }
+  if (parsed.protocol !== 'https:' || parsed.hostname !== 'open.spotify.com') return null
+
+  const match = parsed.pathname.match(/\/(artist|album|track)\/([A-Za-z0-9]+)(?:\/|$)/)
+  if (!match?.[1] || !match?.[2]) return null
+  const canonicalUrl = `https://open.spotify.com/${match[1]}/${match[2]}`
+  return {
+    type: 'spotify-embed',
+    url: canonicalUrl,
+    embedUrl: `https://open.spotify.com/embed/${match[1]}/${match[2]}?utm_source=generator&theme=0&autoPlay=true`,
+  }
+}
+
+/**
+ * Attempt to fetch a Deezer preview. The Deezer public API does NOT send
+ * CORS headers, so this will fail in most browsers. It works from non-browser
+ * contexts (tests, SSR) and some browsers with relaxed CORS policies.
+ * When it fails, the preview chain falls through to YouTube embed.
+ */
+async function resolveDeezerPreview(artistName: string): Promise<PreviewSource | null> {
+  try {
+    const encoded = encodeURIComponent(artistName)
+    const res = await fetch(`https://api.deezer.com/search?q=artist:"${encoded}"&limit=1`)
+    if (!res.ok) return null
+    const data = (await res.json()) as { data?: Array<{ preview?: string }> }
+    const track = data?.data?.[0]
+    if (!track?.preview) return null
+    return { type: 'deezer-audio', url: track.preview, embedUrl: track.preview }
+  } catch {
+    return null
+  }
+}
+
+function resolveYouTubeEmbed(youtubeUrl: string): PreviewSource | null {
+  const videoMatch = youtubeUrl.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([A-Za-z0-9_-]+)/)
+  if (videoMatch?.[1]) {
+    return {
+      type: 'youtube-embed',
+      url: youtubeUrl,
+      embedUrl: `https://www.youtube.com/embed/${videoMatch[1]}?autoplay=1`,
+    }
+  }
+  return null
+}
+
+// Public: exported for testing
+
+export async function resolvePreviewSource(
+  streamingUrls: Record<string, string> | null,
+  artistName: string,
+): Promise<PreviewSource | null> {
+  if (!streamingUrls) return null
+
+  if (streamingUrls.spotify) {
+    const source = resolveSpotifyEmbed(streamingUrls.spotify)
+    if (source) return source
+  }
+
+  const deezer = await resolveDeezerPreview(artistName)
+  if (deezer) return deezer
+
+  if (streamingUrls.youtube) {
+    const source = resolveYouTubeEmbed(streamingUrls.youtube)
+    if (source) return source
+  }
+
+  return null
+}
+
+// Hook
+
+/**
+ * Manages music preview playback state.
+ *
+ * Resolves the best available source in priority order: Spotify embed ->
+ * Deezer 30-sec audio preview -> YouTube embed. Deezer audio is managed here,
+ * Spotify commands and events are bridged to the persistent iframe controller,
+ * and the consumer renders YouTube from `state.source.embedUrl`.
+ */
+export function usePreview() {
+  const [state, setState] = useState<PreviewState>(INITIAL_STATE)
+  const stateRef = useRef<PreviewState>(INITIAL_STATE)
+  const currentMbidRef = useRef<string | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
+  const globalPlayIdRef = useRef(0)
+  const [globalPlayId, setGlobalPlayId] = useState(0)
+  const [playbackEndedCount, setPlaybackEndedCount] = useState(0)
+  const [spotifyCommand, setSpotifyCommand] = useState<SpotifyPlaybackCommand>({
+    id: 0,
+    action: 'pause',
+  })
+  const [volume, setVolumeState] = useState(readStoredVolume)
+  const volumeRef = useRef(volume)
+
+  // Persist the volume and apply it live to any currently-playing audio element.
+  const setVolume = useCallback((next: number) => {
+    const clamped = clampVolume(next)
+    volumeRef.current = clamped
+    setVolumeState(clamped)
+    writeStoredVolume(clamped)
+    if (audioRef.current) audioRef.current.volume = clamped
+  }, [])
+
+  // Keep stateRef in sync so callbacks don't close over stale state
+  const setStateAndRef = useCallback((updater: (s: PreviewState) => PreviewState) => {
+    setState((prev) => {
+      const next = updater(prev)
+      stateRef.current = next
+      return next
+    })
+  }, [])
+
+  const issueSpotifyCommand = useCallback((action: SpotifyPlaybackCommand['action']) => {
+    setSpotifyCommand((current) => ({ id: current.id + 1, action }))
+  }, [])
+
+  const stop = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause()
+      audioRef.current.src = ''
+    }
+    issueSpotifyCommand('pause')
+    currentMbidRef.current = null
+    setStateAndRef(() => INITIAL_STATE)
+  }, [issueSpotifyCommand, setStateAndRef])
+
+  const onSpotifyPlaybackStarted = useCallback(() => {
+    setStateAndRef((current) =>
+      current.source?.type === 'spotify-embed' ? { ...current, playing: true } : current,
+    )
+  }, [setStateAndRef])
+
+  const onSpotifyPlaybackPaused = useCallback(() => {
+    setStateAndRef((current) =>
+      current.source?.type === 'spotify-embed' ? { ...current, playing: false } : current,
+    )
+  }, [setStateAndRef])
+
+  const onSpotifyPlaybackUnavailable = useCallback(() => {
+    if (stateRef.current.source?.type !== 'spotify-embed') return
+    setStateAndRef((current) => ({ ...current, playing: false }))
+    setPlaybackEndedCount((count) => count + 1)
+  }, [setStateAndRef])
+
+  const onSpotifyPlaybackEnded = useCallback(() => {
+    if (stateRef.current.source?.type !== 'spotify-embed') return
+    setStateAndRef((current) => ({ ...current, playing: false }))
+    setPlaybackEndedCount((count) => count + 1)
+  }, [setStateAndRef])
+
+  const play = useCallback(
+    async (
+      mbid: string,
+      artistName: string,
+      streamingUrls: Record<string, string> | null,
+      opts?: { suppressErrorToast?: boolean },
+    ): Promise<PlayOutcome> => {
+      // Always increment globalPlayId so TopTracks local audio is cancelled
+      // regardless of whether this is a new artist, resume, or toggle-pause
+      globalPlayIdRef.current += 1
+      setGlobalPlayId(globalPlayIdRef.current)
+
+      // Toggle pause if same artist is already playing
+      if (currentMbidRef.current === mbid && stateRef.current.playing) {
+        audioRef.current?.pause()
+        if (stateRef.current.source?.type === 'spotify-embed') {
+          issueSpotifyCommand('pause')
+        }
+        setStateAndRef((s) => ({ ...s, playing: false }))
+        return 'paused'
+      }
+
+      // Resume if same artist is paused
+      if (currentMbidRef.current === mbid && !stateRef.current.playing && stateRef.current.source) {
+        if (stateRef.current.source.type === 'deezer-audio' && audioRef.current) {
+          await audioRef.current.play()
+          setStateAndRef((s) => ({ ...s, playing: true }))
+          return 'resumed'
+        }
+        if (stateRef.current.source.type === 'spotify-embed') {
+          issueSpotifyCommand('play')
+          return 'resumed'
+        }
+        // YouTube embeds start through their autoplay URL.
+        setStateAndRef((s) => ({ ...s, playing: true }))
+        return 'resumed'
+      }
+
+      // New artist: stop whatever was playing
+      if (audioRef.current) {
+        audioRef.current.pause()
+        audioRef.current.src = ''
+      }
+
+      const targetMbid = mbid
+      currentMbidRef.current = mbid
+      const spotifySource = streamingUrls?.spotify
+        ? resolveSpotifyEmbed(streamingUrls.spotify)
+        : null
+
+      if (spotifySource) {
+        setStateAndRef(() => ({
+          playing: false,
+          artistMbid: mbid,
+          artistName,
+          source: spotifySource,
+          loading: false,
+          error: null,
+        }))
+        issueSpotifyCommand('play')
+        return 'started'
+      }
+
+      setStateAndRef(() => ({
+        playing: false,
+        artistMbid: mbid,
+        artistName,
+        source: null,
+        loading: true,
+        error: null,
+      }))
+
+      const source = await resolvePreviewSource(streamingUrls, artistName)
+
+      // Guard: user started a different preview while we were resolving
+      if (currentMbidRef.current !== targetMbid) return 'no-source'
+
+      if (!source) {
+        setStateAndRef(() => INITIAL_STATE)
+        if (!opts?.suppressErrorToast) toast.error('No preview available for this artist')
+        return 'no-source'
+      }
+
+      if (source.type === 'deezer-audio') {
+        const audio = new Audio(source.url)
+        audio.volume = volumeRef.current
+        audioRef.current = audio
+        audio.onended = () => {
+          setStateAndRef((s) => ({ ...s, playing: false }))
+          setPlaybackEndedCount((c) => c + 1)
+        }
+        audio.onerror = () => {
+          setStateAndRef((s) => ({ ...s, playing: false, error: 'Audio playback failed.' }))
+          setPlaybackEndedCount((c) => c + 1)
+        }
+        try {
+          await audio.play()
+          setStateAndRef((s) => ({ ...s, source, loading: false, playing: true }))
+        } catch {
+          setStateAndRef(() => INITIAL_STATE)
+          if (!opts?.suppressErrorToast)
+            toast.error('Playback blocked by browser - try clicking again')
+          return 'blocked'
+        }
+        return 'started'
+      }
+
+      // Embed source: component renders the iframe; just expose the source
+      setStateAndRef((s) => ({ ...s, source, loading: false, playing: true }))
+      return 'started'
+    },
+    [issueSpotifyCommand, setStateAndRef],
+  )
+
+  const hasPreview = useCallback((streamingUrls: Record<string, string> | null): boolean => {
+    if (!streamingUrls) return false
+    return Boolean(streamingUrls.spotify || streamingUrls.deezer || streamingUrls.youtube)
+  }, [])
+
+  return {
+    state,
+    play,
+    stop,
+    hasPreview,
+    globalPlayId,
+    playbackEndedCount,
+    spotifyCommand,
+    onSpotifyPlaybackStarted,
+    onSpotifyPlaybackPaused,
+    onSpotifyPlaybackUnavailable,
+    onSpotifyPlaybackEnded,
+    volume,
+    setVolume,
+  }
+}

@@ -1,0 +1,1 @@
+ALTER TABLE "playlist_missing_tracks" ADD COLUMN "reason" text;

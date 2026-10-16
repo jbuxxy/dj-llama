@@ -1,0 +1,71 @@
+import { Hono } from 'hono'
+import { createLidarrClient } from '@/core/clients/lidarr'
+import { logAndSanitize } from '@/core/validation'
+import type { AppDependencies } from '@/server'
+import { adminGuard } from '@/server/middleware/admin-guard'
+import { lidarrAddSchema } from '@/server/schemas/lidarr'
+import { zJson } from '@/server/schemas/validator'
+import type { HonoEnv } from '@/server/types'
+
+export function lidarrRoutes(deps: AppDependencies) {
+  const router = new Hono<HonoEnv>()
+
+  async function getClient() {
+    const settings = await deps.getSettings()
+    if (!settings?.lidarrUrl || !settings?.lidarrApiKey) {
+      throw new Error('Lidarr not configured')
+    }
+    return createLidarrClient(
+      settings.lidarrUrl as string,
+      settings.lidarrApiKey as string,
+      (settings.skipTlsVerify as boolean) ?? false,
+    )
+  }
+
+  router.onError((err, c) => c.json({ error: logAndSanitize(err, 'lidarr-route') }, 500))
+
+  router.get('/api/v1/lidarr/stats', adminGuard(deps.getUserById), async (c) => {
+    const client = await getClient()
+    const artists = await client.getArtists()
+    return c.json({
+      artists: artists.length,
+      monitored: artists.filter((a) => a.monitored).length,
+    })
+  })
+
+  router.get('/api/v1/lidarr/metadataprofiles', adminGuard(deps.getUserById), async (c) => {
+    const client = await getClient()
+    return c.json(await client.getMetadataProfiles())
+  })
+
+  router.get('/api/v1/lidarr/profiles', adminGuard(deps.getUserById), async (c) => {
+    const client = await getClient()
+    return c.json(await client.getQualityProfiles())
+  })
+
+  router.get('/api/v1/lidarr/rootfolders', adminGuard(deps.getUserById), async (c) => {
+    const client = await getClient()
+    return c.json(await client.getRootFolders())
+  })
+
+  router.post(
+    '/api/v1/lidarr/add',
+    adminGuard(deps.getUserById),
+    zJson(lidarrAddSchema),
+    async (c) => {
+      const { foreignArtistId, artistName, qualityProfileId, metadataProfileId, rootFolderId } =
+        c.req.valid('json')
+      const client = await getClient()
+      const artist = await client.addArtist(
+        foreignArtistId,
+        artistName,
+        qualityProfileId ?? 1,
+        metadataProfileId ?? 1,
+        rootFolderId,
+      )
+      return c.json(artist)
+    },
+  )
+
+  return router
+}

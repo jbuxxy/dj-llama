@@ -1,0 +1,281 @@
+import { and, eq, inArray, isNotNull, isNull, lt, or, sql } from 'drizzle-orm'
+import { isValidMbid } from '@/core/validation'
+import type { Database, DbOrTx } from '@/db'
+import { artistGenreAliases, artists, genres, libraryArtists } from '@/db/schema'
+
+export type ArtistRow = typeof artists.$inferSelect
+
+export type ArtistInsert = {
+  mbid: string
+  name: string
+  disambiguation?: string | null
+  tags?: string[] | null
+  genres?: string[] | null
+  imageUrl?: string | null
+  logoUrl?: string | null
+  imageFailed?: boolean
+  streamingUrls?: Record<string, string> | null
+  beginYear?: number | null
+  endYear?: number | null
+}
+
+export async function upsertArtist(db: DbOrTx, artist: ArtistInsert): Promise<ArtistRow> {
+  const { imageFailed, ...artistData } = artist
+
+  // Match the update-path priority: clear negative cache when an image is present,
+  // otherwise mark failure time; undefined leaves the column at the schema default.
+  const imageFailedAtInsert = artist.imageUrl ? null : imageFailed ? new Date() : undefined
+
+  const rows = await db
+    .insert(artists)
+    .values({
+      ...artistData,
+      imageFailedAt: imageFailedAtInsert,
+      cachedAt: new Date(),
+      genresCachedAt: artist.genres !== undefined ? new Date() : undefined,
+    })
+    .onConflictDoUpdate({
+      target: artists.mbid,
+      set: {
+        name: artist.name,
+        disambiguation: sql`COALESCE(excluded.disambiguation, ${artists.disambiguation})`,
+        tags: sql`COALESCE(excluded.tags, ${artists.tags})`,
+        genres: sql`COALESCE(excluded.genres, ${artists.genres})`,
+        imageUrl: sql`COALESCE(excluded.image_url, ${artists.imageUrl})`,
+        logoUrl: sql`COALESCE(excluded.logo_url, ${artists.logoUrl})`,
+        streamingUrls: sql`COALESCE(excluded.streaming_urls, ${artists.streamingUrls})`,
+        beginYear: sql`COALESCE(excluded.begin_year, ${artists.beginYear})`,
+        endYear: sql`COALESCE(excluded.end_year, ${artists.endYear})`,
+        // Clear negative cache when image found; set it when lookup failed; preserve otherwise
+        imageFailedAt: artist.imageUrl
+          ? sql`NULL`
+          : imageFailed
+            ? sql`NOW()`
+            : sql`${artists.imageFailedAt}`,
+        cachedAt: new Date(),
+        genresCachedAt: artist.genres !== undefined ? new Date() : sql`${artists.genresCachedAt}`,
+      },
+    })
+    .returning()
+  const row = rows[0]
+  if (!row) throw new Error(`upsertArtist: no row returned for mbid=${artist.mbid}`)
+  return row
+}
+
+export async function getArtistGenreCacheByMbids(
+  db: Database,
+  mbids: string[],
+): Promise<Array<Pick<ArtistRow, 'mbid' | 'name' | 'genres' | 'cachedAt'>>> {
+  const validMbids = mbids.filter(isValidMbid)
+  if (validMbids.length === 0) return []
+  return db
+    .select({
+      mbid: artists.mbid,
+      name: artists.name,
+      genres: artists.genres,
+      cachedAt: artists.genresCachedAt,
+    })
+    .from(artists)
+    .where(inArray(artists.mbid, validMbids))
+}
+
+/**
+ * Cached artist photos, keyed by mbid -- used as a fallback for
+ * Lidarr-backed artist search results, since Lidarr's own MusicBrainz-sourced
+ * artist lookups return no image data at all (only album/release covers do).
+ * Only covers artists DJ Llama has already resolved an image for via the
+ * pipeline's own fanart.tv/AudioDB/musicinfo chain; a never-seen-before
+ * artist still falls back to the generic placeholder icon client-side.
+ */
+export async function getArtistImageCacheByMbids(
+  db: Database,
+  mbids: string[],
+): Promise<Array<{ mbid: string; imageUrl: string | null }>> {
+  const validMbids = mbids.filter(isValidMbid)
+  if (validMbids.length === 0) return []
+  return db
+    .select({ mbid: artists.mbid, imageUrl: artists.imageUrl })
+    .from(artists)
+    .where(inArray(artists.mbid, validMbids))
+}
+
+export type ArtistImageBackfillCandidate = { mbid: string; name: string }
+
+export const IMAGE_NEGATIVE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Reconciled library artists (across all users) whose shared `artists` image
+ * cache entry is missing or stale -- candidates for the scheduled image
+ * backfill job. Distinct on mbid since the same artist can be reconciled
+ * under many users' libraries; a global LEFT JOIN rather than a per-user
+ * query since the `artists` image cache itself is shared, not per-user.
+ */
+export async function getArtistsNeedingImageBackfill(
+  db: Database,
+  limit: number,
+): Promise<ArtistImageBackfillCandidate[]> {
+  const cutoff = new Date(Date.now() - IMAGE_NEGATIVE_CACHE_TTL_MS)
+  return db
+    .selectDistinctOn([libraryArtists.mbid], {
+      mbid: libraryArtists.mbid,
+      name: libraryArtists.name,
+    })
+    .from(libraryArtists)
+    .leftJoin(artists, eq(libraryArtists.mbid, artists.mbid))
+    .where(
+      and(
+        isNotNull(libraryArtists.mbid),
+        or(
+          isNull(artists.id),
+          and(
+            isNull(artists.imageUrl),
+            or(isNull(artists.imageFailedAt), lt(artists.imageFailedAt, cutoff)),
+          ),
+        ),
+      ),
+    )
+    .orderBy(libraryArtists.mbid)
+    .limit(limit) as Promise<ArtistImageBackfillCandidate[]>
+}
+
+export async function getArtistGenreCacheByAliases(
+  db: Database,
+  aliases: Array<{ source: string; nameNormalized: string }>,
+): Promise<
+  Array<
+    Pick<ArtistRow, 'mbid' | 'name' | 'genres'> & {
+      source: string
+      nameNormalized: string
+      cachedAt: Date | null
+    }
+  >
+> {
+  const sources = [...new Set(aliases.map((alias) => alias.source).filter(Boolean))]
+  const normalizedNames = [...new Set(aliases.map((alias) => alias.nameNormalized).filter(Boolean))]
+  if (sources.length === 0 || normalizedNames.length === 0) return []
+  return db
+    .select({
+      source: artistGenreAliases.source,
+      nameNormalized: artistGenreAliases.nameNormalized,
+      mbid: artists.mbid,
+      name: artists.name,
+      genres: artists.genres,
+      cachedAt: artists.genresCachedAt,
+    })
+    .from(artistGenreAliases)
+    .innerJoin(artists, eq(artistGenreAliases.mbid, artists.mbid))
+    .where(
+      and(
+        inArray(artistGenreAliases.source, sources),
+        inArray(artistGenreAliases.nameNormalized, normalizedNames),
+      ),
+    )
+}
+
+export async function upsertArtistGenres(
+  db: Database,
+  data: { mbid: string; name: string; genres: string[] },
+): Promise<void> {
+  await db
+    .insert(artists)
+    .values({
+      mbid: data.mbid,
+      name: data.name,
+      genres: data.genres,
+      cachedAt: new Date(),
+      genresCachedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: artists.mbid,
+      set: {
+        genres: data.genres,
+        genresCachedAt: new Date(),
+      },
+    })
+}
+
+export async function upsertArtistGenreAlias(
+  db: Database,
+  data: { source: string; nameNormalized: string; mbid: string },
+): Promise<void> {
+  await db
+    .insert(artistGenreAliases)
+    .values({ ...data, resolvedAt: new Date() })
+    .onConflictDoUpdate({
+      target: [artistGenreAliases.source, artistGenreAliases.nameNormalized],
+      set: { mbid: data.mbid, resolvedAt: new Date() },
+    })
+}
+
+export async function getArtistById(db: Database, id: number): Promise<ArtistRow | null> {
+  const rows = await db.select().from(artists).where(eq(artists.id, id)).limit(1)
+  return rows[0] ?? null
+}
+
+type GenreEnrichment = { examples: string[]; liveCount: number }
+
+/**
+ * Returns a map of genre name -> { examples, liveCount } using two efficient
+ * queries: a lateral join for example names, and an aggregate for live counts.
+ */
+export async function getGenreEnrichments(
+  db: Database,
+  exampleLimit = 3,
+): Promise<Map<string, GenreEnrichment>> {
+  const [exRows, countRows] = await Promise.all([
+    db.execute<{ genre_name: string; artist_name: string }>(
+      sql`SELECT g.name AS genre_name, sub.name AS artist_name
+          FROM ${genres} g
+          CROSS JOIN LATERAL (
+            SELECT ar.name
+            FROM artists ar
+            WHERE EXISTS (
+              SELECT 1 FROM unnest(ar.genres) ag WHERE lower(ag) = lower(g.name)
+            )
+            ORDER BY ar.name
+            LIMIT ${exampleLimit}
+          ) sub
+          WHERE g.source = 'library'`,
+    ),
+    db.execute<{ genre_name: string; cnt: string }>(
+      sql`SELECT g.name AS genre_name, count(*)::text AS cnt
+          FROM ${genres} g
+          JOIN artists ar ON EXISTS (
+            SELECT 1 FROM unnest(ar.genres) ag WHERE lower(ag) = lower(g.name)
+          )
+          WHERE g.source = 'library'
+          GROUP BY g.name`,
+    ),
+  ])
+
+  const result = new Map<string, GenreEnrichment>()
+  const counts = countRows.rows as { genre_name: string; cnt: string }[]
+  const examples = exRows.rows as { genre_name: string; artist_name: string }[]
+
+  for (const { genre_name, cnt } of counts) {
+    result.set(genre_name, { examples: [], liveCount: Number.parseInt(cnt, 10) })
+  }
+
+  for (const { genre_name, artist_name } of examples) {
+    const entry = result.get(genre_name) ?? { examples: [], liveCount: 0 }
+    entry.examples.push(artist_name)
+    result.set(genre_name, entry)
+  }
+
+  return result
+}
+
+export async function getArtistsByGenre(
+  db: Database,
+  genreName: string,
+  limit = 100,
+): Promise<ArtistRow[]> {
+  return db
+    .select()
+    .from(artists)
+    .where(
+      sql`EXISTS (SELECT 1 FROM unnest(${artists.genres}) g WHERE lower(g) = lower(${genreName}))`,
+    )
+    .limit(limit)
+    .orderBy(artists.name)
+}

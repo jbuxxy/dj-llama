@@ -1,0 +1,295 @@
+import * as dns from 'node:dns/promises'
+import { isIP } from 'node:net'
+import {
+  formatUrlHostname,
+  getLookupHostname,
+  isPrivateIp,
+  isPrivateUrl,
+  normalizeIp,
+} from '@/core/validation'
+
+const REDACTED_QUERY_VALUE = '[REDACTED]'
+const SENSITIVE_QUERY_KEYS = new Set([
+  'api_key',
+  'apikey',
+  'key',
+  'token',
+  'secret',
+  'password',
+  'auth',
+  'access_token',
+  'auth_token',
+  'signature',
+  'sig',
+  // Subsonic auth params: 't' is md5(password+salt), 's' is the salt.
+  // Logging both would expose an offline-brute-forceable credential.
+  't',
+  's',
+])
+
+type HttpClientConfig = {
+  baseUrl: string
+  headers?: Record<string, string>
+  timeout?: number
+  retries?: number
+  skipTlsVerify?: boolean
+  publicIpOnly?: boolean
+  followRedirects?: boolean
+  onRequest?: (method: string, url: string) => void
+}
+
+export type HttpRequestOptions = {
+  retries?: number
+  timeout?: number
+}
+
+export function createHttpClient(config: HttpClientConfig) {
+  const {
+    baseUrl,
+    headers = {},
+    timeout = 10_000,
+    retries = 3,
+    skipTlsVerify = false,
+    publicIpOnly = false,
+    followRedirects = false,
+    onRequest,
+  } = config
+
+  async function send(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: HttpRequestOptions = {},
+  ): Promise<Response> {
+    const url = `${baseUrl}${path}`
+    const maxRetries = options.retries ?? retries
+    const effectiveTimeout = options.timeout ?? timeout
+    onRequest?.(method, url)
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), effectiveTimeout)
+
+      try {
+        const prepared = await prepareRequest(
+          url,
+          {
+            method,
+            headers: {
+              'Content-Type': 'application/json',
+              ...headers,
+            },
+            body: body ? JSON.stringify(body) : undefined,
+            signal: controller.signal,
+          },
+          {
+            publicIpOnly,
+            followRedirects,
+            skipTlsVerify,
+          },
+        )
+
+        const res = await fetch(prepared.url, prepared.init)
+
+        clearTimeout(timer)
+        if (res.ok) return res
+
+        if (!followRedirects && res.status >= 300 && res.status < 400) {
+          const location = res.headers.get('location')
+          throw new HttpError(
+            res.status,
+            `Redirect blocked${location ? `: ${redactUrlForLog(location)}` : ''}`,
+            url,
+          )
+        }
+
+        const errorBody = await readResponseText(res)
+        if (res.status >= 400 && res.status < 500) {
+          throw new HttpError(res.status, errorBody, url)
+        }
+        if (attempt >= maxRetries) {
+          throw new HttpError(res.status, errorBody, url)
+        }
+      } catch (err: unknown) {
+        clearTimeout(timer)
+        if (err instanceof HttpError) {
+          if (err.status >= 500 && attempt < maxRetries) {
+            await sleep(2 ** attempt * 500)
+            continue
+          }
+          throw err
+        }
+        if (attempt >= maxRetries) throw err
+        await sleep(2 ** attempt * 500)
+      }
+    }
+
+    throw new Error(`Request failed after ${maxRetries} retries: ${method} ${redactUrlForLog(url)}`)
+  }
+
+  async function request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: HttpRequestOptions = {},
+  ): Promise<T> {
+    const url = `${baseUrl}${path}`
+    const res = await send(method, path, body, options)
+    const text = await res.text()
+    if (!text) {
+      throw new HttpError(res.status, 'Expected JSON response body', url)
+    }
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      throw new HttpError(res.status, `Invalid JSON: ${text.slice(0, 200)}`, url)
+    }
+  }
+
+  async function requestVoid(
+    method: string,
+    path: string,
+    body?: unknown,
+    options: HttpRequestOptions = {},
+  ): Promise<void> {
+    await send(method, path, body, options)
+  }
+
+  return {
+    get: <T>(path: string, options?: HttpRequestOptions) =>
+      request<T>('GET', path, undefined, options),
+    post: <T>(path: string, body?: unknown, options?: HttpRequestOptions) =>
+      request<T>('POST', path, body, options),
+    put: <T>(path: string, body?: unknown, options?: HttpRequestOptions) =>
+      request<T>('PUT', path, body, options),
+    delete: (path: string, options?: HttpRequestOptions) =>
+      requestVoid('DELETE', path, undefined, options),
+  }
+}
+
+async function prepareRequest(
+  url: string,
+  init: RequestInit,
+  options: { publicIpOnly: boolean; followRedirects: boolean; skipTlsVerify: boolean },
+): Promise<{ url: string; init: RequestInit }> {
+  const headers = new Headers(init.headers)
+  let fetchUrl = url
+  let serverName: string | null = null
+
+  if (options.publicIpOnly) {
+    if (isPrivateUrl(url)) {
+      throw new Error('URL points to a private/internal address')
+    }
+
+    const parsedUrl = new URL(url)
+    const hostname = getLookupHostname(parsedUrl)
+    const { address } = await dns.lookup(hostname)
+    if (isPrivateIp(address)) {
+      throw new Error('URL resolves to a private/internal IP')
+    }
+
+    // Pin the resolved IP for both http: and https: so a second DNS lookup
+    // during fetch() cannot rebind to a private address (TOCTOU). For HTTPS,
+    // preserve the original hostname for SNI and cert verification.
+    if (address !== hostname) {
+      const pinnedUrl = new URL(url)
+      pinnedUrl.hostname = formatUrlHostname(address)
+      fetchUrl = pinnedUrl.toString()
+      headers.set('Host', parsedUrl.host)
+      const normalizedHostname = normalizeIp(parsedUrl.hostname)
+      if (parsedUrl.protocol === 'https:' && isIP(normalizedHostname) === 0) {
+        serverName = normalizedHostname
+      }
+    }
+  }
+
+  const tls: { serverName?: string; rejectUnauthorized?: boolean } = {}
+  if (serverName) tls.serverName = serverName
+  if (options.skipTlsVerify) tls.rejectUnauthorized = false
+  const tlsInit = Object.keys(tls).length > 0 ? { tls } : {}
+
+  return {
+    url: fetchUrl,
+    init: {
+      ...init,
+      headers,
+      redirect: options.followRedirects ? 'follow' : 'manual',
+      ...tlsInit,
+    } as RequestInit,
+  }
+}
+
+export class HttpError extends Error {
+  constructor(
+    public status: number,
+    public body: string,
+    url: string,
+  ) {
+    const redactedUrl = redactUrlForLog(url)
+    super(`HTTP ${status} from ${redactedUrl}: ${body}`)
+    this.name = 'HttpError'
+    this.url = redactedUrl
+  }
+
+  public url: string
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+async function readResponseText(res: Response): Promise<string> {
+  const text = await res.text()
+  return text || '(empty response body)'
+}
+
+export function redactUrlForLog(url: string): string {
+  try {
+    const absolute = /^[a-zA-Z][a-zA-Z\d+\-.]*:/.test(url)
+    const parsed = absolute ? new URL(url) : new URL(url, 'http://redact.invalid')
+
+    if (parsed.username) parsed.username = REDACTED_QUERY_VALUE
+    if (parsed.password) parsed.password = REDACTED_QUERY_VALUE
+    if (parsed.hash) parsed.hash = REDACTED_QUERY_VALUE
+
+    const redactedParams = new URLSearchParams()
+
+    for (const [key, value] of parsed.searchParams.entries()) {
+      redactedParams.append(
+        key,
+        SENSITIVE_QUERY_KEYS.has(key.toLowerCase()) ? REDACTED_QUERY_VALUE : value,
+      )
+    }
+
+    parsed.search = redactedParams.toString()
+    const serialized = parsed.toString()
+    return absolute ? serialized : serialized.replace('http://redact.invalid', '')
+  } catch {
+    return redactQueryStringFallback(url)
+  }
+}
+
+function redactQueryStringFallback(url: string): string {
+  const queryStart = url.indexOf('?')
+  if (queryStart === -1) return url
+
+  const hashStart = url.indexOf('#', queryStart)
+  const prefix = url.slice(0, queryStart + 1)
+  const query = url.slice(queryStart + 1, hashStart === -1 ? undefined : hashStart)
+  const suffix = hashStart === -1 ? '' : url.slice(hashStart)
+
+  const redactedQuery = query
+    .split('&')
+    .map((part) => {
+      const equalsIndex = part.indexOf('=')
+      if (equalsIndex === -1) return part
+
+      const key = part.slice(0, equalsIndex).toLowerCase()
+      if (!SENSITIVE_QUERY_KEYS.has(key)) return part
+
+      return `${part.slice(0, equalsIndex + 1)}${REDACTED_QUERY_VALUE}`
+    })
+    .join('&')
+
+  return `${prefix}${redactedQuery}${suffix}`
+}

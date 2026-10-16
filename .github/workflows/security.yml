@@ -1,0 +1,111 @@
+name: Security
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Dependency audit
+        # Structured JSON output + jq filter avoids the fragile grep that would
+        # match 'high'/'critical' anywhere in the text (e.g. inside package
+        # names or advisory titles).
+        run: |
+          set -euo pipefail
+          report=$(bun audit --json 2>/dev/null || true)
+          echo "$report"
+          count=$(printf '%s' "$report" | jq '[.vulnerabilities[]? | select(.severity == "high" or .severity == "critical")] | length')
+          echo "High/critical vulnerabilities: $count"
+          if [ "$count" -gt 0 ]; then
+            echo "::error::High or critical vulnerabilities found"
+            exit 1
+          fi
+
+  trivy-fs:
+    name: Trivy filesystem scan
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-fs.sarif
+          # advisory-only: findings surface in code scanning (SARIF upload).
+          # Revisit once we have a baseline + `.trivyignore` with dated entries.
+          exit-code: "0"
+          # Pin binary version; v0.69.4-v0.69.6 contained credential-stealing malware (CVE-2026-33634)
+          trivy-version: "0.70.0"
+      - uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        if: always()
+        with:
+          sarif_file: trivy-fs.sarif
+
+  trivy-image:
+    name: Trivy container scan
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.3.14"
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.bun/install/cache
+          key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: bun-${{ runner.os }}-
+      - run: bun install --frozen-lockfile
+      - name: Build image
+        run: docker build -t djllama:scan -f deploy/docker/Dockerfile .
+      # advisory-only: base image CVEs are upstream, patched via dependabot
+      - uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: djllama:scan
+          severity: HIGH,CRITICAL
+          format: sarif
+          output: trivy-image.sarif
+          # Pin binary version; v0.69.4-v0.69.6 contained credential-stealing malware (CVE-2026-33634)
+          trivy-version: "0.70.0"
+      - uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        if: always()
+        with:
+          sarif_file: trivy-image.sarif
+
+  codeql:
+    runs-on: ubuntu-24.04
+    permissions:
+      security-events: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4

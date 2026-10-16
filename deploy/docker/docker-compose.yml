@@ -1,0 +1,116 @@
+# Podman users on Fedora/RHEL with SELinux enforcing:
+# Add :Z to the postgres volume mount:
+#   volumes:
+#     - pgdata:/var/lib/postgresql/data:Z
+
+secrets:
+  postgres_password:
+    file: ./secrets/postgres_password
+
+networks:
+  frontend:
+  backend:
+    internal: true
+
+services:
+  app:
+    image: ghcr.io/jbuxxy/dj-llama:stable
+    # Channels:
+    #   :stable -> the newest tagged release (recommended)
+    #   :latest -> every commit to main, between releases
+    # Pin to a specific release when you want zero surprises:
+    # image: ghcr.io/jbuxxy/dj-llama:2026.10.1
+    user: "1000:1000"
+    networks:
+      - frontend
+      - backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - PORT=3000
+      # The app assembles DATABASE_URL from these parts and the password file,
+      # so the DB password lives in exactly one place: secrets/postgres_password.
+      - DB_HOST=postgres
+      - DB_USER=${DB_USER:-djllama}
+      - DB_NAME=${DB_NAME:-djllama}
+      - DB_PASS_FILE=/run/secrets/postgres_password
+    secrets:
+      - postgres_password
+    ports:
+      - "${PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      start_period: 30s
+      retries: 3
+    read_only: true
+    volumes:
+      - backups:/app/backups
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: "2.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine@sha256:c7526c0f6c3f30260a563d7bcf8ad778effac59a44f8ffa86678c35418338609
+    networks:
+      - backend
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      - POSTGRES_USER=${DB_USER:-djllama}
+      - POSTGRES_PASSWORD_FILE=/run/secrets/postgres_password
+      - POSTGRES_DB=${DB_NAME:-djllama}
+    secrets:
+      - postgres_password
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-djllama}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+      - CHOWN
+      - FOWNER
+      - DAC_READ_SEARCH
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+          cpus: "1.0"
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  backups:

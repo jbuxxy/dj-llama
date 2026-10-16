@@ -1,0 +1,49 @@
+import type { JobMetadata } from '@/db/schema'
+
+export type JobType = 'pipeline' | 'quick_discover' | 'target' | 'playlist' | 'library_sync'
+export type SourceStatus = 'ok' | 'error' | 'skipped'
+
+export type SourceResult = {
+  status: SourceStatus
+  /** 'history' = supplies listening history (seeds); 'tracks' = similar tracks; else artists. */
+  role?: 'history' | 'candidates' | 'tracks'
+  artists?: number
+  ms?: number
+  error?: string
+  reason?: string
+}
+
+export type JobRunRow = {
+  id: number
+  type: string
+  status: string
+  userId: number | null
+  startedAt: Date
+  completedAt: Date | null
+  durationMs: number | null
+  error: string | null
+  metadata: JobMetadata
+  sourceResults: Record<string, SourceResult> | null
+  subscriptionId: number | null
+  batchId: number | null
+}
+
+export type StartJobParams = {
+  type: JobType
+  userId?: number
+  metadata?: JobMetadata
+}
+
+export type CompleteJobParams = {
+  metadata?: JobMetadata
+  sourceResults?: Record<string, SourceResult>
+  batchId?: number
+}
+
+export interface JobRecorder {
+  start(params: StartJobParams): Promise<number>
+  complete(jobId: number, params?: CompleteJobParams): Promise<void>
+  fail(jobId: number, error: string): Promise<void>
+  markStuck(): Promise<number>
+  markInterrupted(): Promise<number>
+}

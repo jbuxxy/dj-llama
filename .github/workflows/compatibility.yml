@@ -1,0 +1,215 @@
+name: Compatibility
+
+on:
+  pull_request:
+    paths:
+      - "deploy/docker/**"
+      - ".github/workflows/compatibility.yml"
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  podman:
+    name: Podman (rootless)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - name: Install podman-compose
+        run: pip install podman-compose
+
+      - name: Prepare env
+        run: |
+          cp deploy/docker/.env.example deploy/docker/.env
+          printf '%s\n' 'testpass123' > deploy/docker/secrets/postgres_password
+
+      # Existing Postgres install + freshly-built image (upgrade-safety test).
+      # The base compose sets DB_HOST + a secret, so the app must resolve postgres.
+      - name: Start postgres stack (base compose + built image)
+        working-directory: deploy/docker
+        run: podman-compose -f docker-compose.yml -f docker-compose.compat.yml up -d --build
+
+      - name: Assert postgres backend
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after ${i}s"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"dbBackend":"postgres"'
+
+      - name: Tear down postgres stack
+        working-directory: deploy/docker
+        run: podman-compose -f docker-compose.yml -f docker-compose.compat.yml down -v
+
+      # Embedded PGlite stack. No DB sidecar and no secret; .env carries no DSN
+      # (the DB vars in .env.example are commented out), so the app must resolve
+      # pglite from DB_PATH set by the pglite compose.
+      - name: Start pglite stack
+        working-directory: deploy/docker
+        run: podman-compose -f docker-compose.pglite.yml -f docker-compose.compat.yml up -d --build
+
+      - name: Assert pglite backend + persistence across restart
+        working-directory: deploy/docker
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after ${i}s"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"dbBackend":"pglite"'
+          podman-compose -f docker-compose.pglite.yml -f docker-compose.compat.yml restart
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after restart (${i}s)"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"status":"ok"'
+
+      - name: Dump logs on failure
+        if: failure()
+        working-directory: deploy/docker
+        run: |
+          podman-compose -f docker-compose.yml -f docker-compose.compat.yml logs || true
+          podman-compose -f docker-compose.pglite.yml -f docker-compose.compat.yml logs || true
+
+      - name: Tear down
+        if: always()
+        working-directory: deploy/docker
+        run: |
+          podman-compose -f docker-compose.yml -f docker-compose.compat.yml down -v || true
+          podman-compose -f docker-compose.pglite.yml -f docker-compose.compat.yml down -v || true
+
+  docker-macos:
+    name: Docker Desktop (macOS)
+    runs-on: macos-15
+    # Hosted macOS runners are flaky when booting Docker Desktop; keep the
+    # signal visible in PRs and scheduled runs without blocking merges.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+
+      - name: Install Docker
+        timeout-minutes: 5
+        run: brew install --cask docker
+
+      - name: Start Docker Desktop
+        id: docker
+        timeout-minutes: 6
+        run: |
+          open /Applications/Docker.app
+          for i in $(seq 1 150); do
+            if docker info > /dev/null 2>&1; then
+              echo "Docker ready after $((i * 2))s"
+              echo "ready=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "::error::Docker Desktop did not become ready within 300 seconds"
+          echo "ready=false" >> "$GITHUB_OUTPUT"
+          exit 1
+
+      - name: Prepare env
+        if: steps.docker.outputs.ready == 'true'
+        run: |
+          cp deploy/docker/.env.example deploy/docker/.env
+          printf '%s\n' 'testpass123' > deploy/docker/secrets/postgres_password
+
+      # Existing Postgres install + freshly-built image (upgrade-safety test).
+      # The base compose sets DB_HOST + a secret, so the app must resolve postgres.
+      - name: Start postgres stack (base compose + built image)
+        if: steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: docker compose -f docker-compose.yml -f docker-compose.compat.yml up -d --build
+
+      - name: Assert postgres backend
+        id: postgres_assert
+        if: steps.docker.outputs.ready == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after ${i}s"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"dbBackend":"postgres"'
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+
+      - name: Tear down postgres stack
+        if: steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: docker compose -f docker-compose.yml -f docker-compose.compat.yml down -v
+
+      # Embedded PGlite stack. No DB sidecar and no secret; .env carries no DSN
+      # (the DB vars in .env.example are commented out), so the app must resolve
+      # pglite from DB_PATH set by the pglite compose.
+      - name: Start pglite stack
+        if: steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: docker compose -f docker-compose.pglite.yml -f docker-compose.compat.yml up -d --build
+
+      - name: Assert pglite backend + persistence across restart
+        id: pglite_assert
+        if: steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after ${i}s"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"dbBackend":"pglite"'
+          docker compose -f docker-compose.pglite.yml -f docker-compose.compat.yml restart
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:3000/health > /dev/null 2>&1; then
+              echo "App is healthy after restart (${i}s)"
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS http://localhost:3000/health | grep -q '"status":"ok"'
+          echo "ran=true" >> "$GITHUB_OUTPUT"
+
+      - name: Dump logs on failure
+        if: failure() && steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.compat.yml logs || true
+          docker compose -f docker-compose.pglite.yml -f docker-compose.compat.yml logs || true
+
+      - name: Tear down
+        if: always() && steps.docker.outputs.ready == 'true'
+        working-directory: deploy/docker
+        run: |
+          docker compose -f docker-compose.yml -f docker-compose.compat.yml down -v 2>/dev/null || true
+          docker compose -f docker-compose.pglite.yml -f docker-compose.compat.yml down -v 2>/dev/null || true
+
+      - name: Verify compatibility assertions ran
+        if: always()
+        env:
+          DOCKER_READY: ${{ steps.docker.outputs.ready }}
+          POSTGRES_ASSERTED: ${{ steps.postgres_assert.outputs.ran }}
+          PGLITE_ASSERTED: ${{ steps.pglite_assert.outputs.ran }}
+        run: |
+          set -eu
+          test "$DOCKER_READY" = true
+          test "$POSTGRES_ASSERTED" = true
+          test "$PGLITE_ASSERTED" = true

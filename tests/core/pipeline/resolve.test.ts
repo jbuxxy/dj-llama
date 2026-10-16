@@ -1,0 +1,1019 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+import { RateLimitedError } from '@/core/clients/audiodb'
+import type { MBArtist } from '@/core/clients/musicbrainz'
+import { fetchArtistImage, resolve } from '@/core/pipeline/resolve'
+import type { DiscoveredArtist } from '@/core/types'
+
+function makeMbArtist(overrides: Partial<MBArtist> = {}): MBArtist {
+  return {
+    id: 'mbid-default',
+    name: 'Test Artist',
+    disambiguation: undefined,
+    tags: [{ name: 'rock', count: 5 }],
+    relations: [
+      {
+        type: 'streaming music',
+        url: { resource: 'https://open.spotify.com/artist/abc' },
+      },
+    ],
+    ...overrides,
+  }
+}
+
+function makeMb(
+  lookupResult?: MBArtist,
+  searchResult?: { artists: Array<{ id: string; name: string; score: number }> },
+) {
+  return {
+    lookupArtist: vi.fn().mockResolvedValue(lookupResult ?? makeMbArtist()),
+    searchArtist: vi
+      .fn()
+      .mockResolvedValue(
+        searchResult ?? { artists: [{ id: 'mbid-found', name: 'Found Artist', score: 90 }] },
+      ),
+    extractStreamingUrls: vi
+      .fn()
+      .mockImplementation((relations: Array<{ type: string; url?: { resource: string } }>) => {
+        const result: Record<string, string> = {}
+        for (const rel of relations) {
+          if (rel.url?.resource?.includes('spotify')) {
+            result.spotify = rel.url.resource
+          }
+        }
+        return result
+      }),
+    getReleaseGroups: undefined as
+      | ((
+          artistMbid: string,
+        ) => Promise<Array<{ id: string; title: string; type: string; firstReleaseDate?: string }>>)
+      | undefined,
+  }
+}
+
+describe('resolve()', () => {
+  it('passes through artists that already have MBIDs', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'listenbrainz' },
+    ]
+    const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+
+    const result = await resolve(discovered, mb)
+
+    expect(result).toHaveLength(1)
+    expect(result[0]?.mbid).toBe('mbid-rh')
+    expect(mb.lookupArtist).toHaveBeenCalledWith('mbid-rh')
+    expect(mb.searchArtist).not.toHaveBeenCalled()
+  })
+
+  it('searches MB for artists without MBIDs', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Burial', similarityScore: 0.85, source: 'lastfm' },
+    ]
+    const mb = makeMb(makeMbArtist({ id: 'mbid-found', name: 'Burial' }), {
+      artists: [{ id: 'mbid-found', name: 'Burial', score: 95 }],
+    })
+
+    const result = await resolve(discovered, mb)
+
+    expect(mb.searchArtist).toHaveBeenCalledWith('Burial')
+    expect(mb.lookupArtist).toHaveBeenCalledWith('mbid-found')
+    expect(result).toHaveLength(1)
+    expect(result[0]?.mbid).toBe('mbid-found')
+  })
+
+  it('drops artists that cannot be resolved (lookupArtist throws)', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Ghost Artist', mbid: 'mbid-bad', similarityScore: 0.5, source: 'ai' },
+    ]
+    const mb = makeMb()
+    mb.lookupArtist.mockRejectedValue(new Error('Not found'))
+
+    const result = await resolve(discovered, mb)
+
+    expect(result).toHaveLength(0)
+  })
+
+  it('drops artists where search returns no results', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Nonexistent Band', similarityScore: 0.4, source: 'lastfm' },
+    ]
+    const mb = makeMb(undefined, { artists: [] })
+
+    const result = await resolve(discovered, mb)
+
+    expect(result).toHaveLength(0)
+  })
+
+  it('extracts streaming URLs from MB relations', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'listenbrainz' },
+    ]
+    const mb = makeMb(
+      makeMbArtist({
+        id: 'mbid-rh',
+        name: 'Radiohead',
+        relations: [
+          {
+            type: 'streaming music',
+            url: { resource: 'https://open.spotify.com/artist/4Z8W4fKeB5YxbusRsdQVPb' },
+          },
+        ],
+      }),
+    )
+
+    const result = await resolve(discovered, mb)
+
+    expect(result[0]?.streamingUrls).toHaveProperty('spotify')
+  })
+
+  it('deduplicates artists with the same MBID from multiple discoveries', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'listenbrainz' },
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.8, source: 'lastfm' },
+    ]
+    const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+
+    const result = await resolve(discovered, mb)
+
+    // Both discoveries should be attached to one result
+    expect(result).toHaveLength(1)
+    expect(result[0]?.discoveries).toHaveLength(2)
+  })
+
+  it('emits progress events via callback', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'listenbrainz' },
+    ]
+    const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+    const onProgress = vi.fn()
+
+    await resolve(discovered, mb, onProgress)
+
+    expect(onProgress).toHaveBeenCalled()
+    // Should have received at least one progress event with stage 'resolve'
+    expect(onProgress.mock.calls.some((call) => call[0].stage === 'resolve')).toBe(true)
+  })
+
+  it('builds tags and genres from MB tags', async () => {
+    const discovered: DiscoveredArtist[] = [
+      { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'listenbrainz' },
+    ]
+    const mb = makeMb(
+      makeMbArtist({
+        id: 'mbid-rh',
+        name: 'Radiohead',
+        tags: [
+          { name: 'alternative rock', count: 10 },
+          { name: 'art rock', count: 8 },
+        ],
+      }),
+    )
+
+    const result = await resolve(discovered, mb)
+
+    expect(result[0]?.tags).toContain('alternative rock')
+    expect(result[0]?.genres).toContain('art rock')
+  })
+
+  describe('MBID disambiguation', () => {
+    it('picks MB result with best genre overlap when AI provides genres', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Burial',
+          similarityScore: 0.85,
+          source: 'ai',
+          aiReasoning: 'UK dubstep artist',
+          genres: ['dubstep', 'electronic', 'uk garage'],
+        },
+      ]
+
+      const wrongArtist = makeMbArtist({
+        id: 'mbid-wrong',
+        name: 'Burial',
+        tags: [
+          { name: 'black metal', count: 10 },
+          { name: 'death metal', count: 5 },
+        ],
+      })
+      const rightArtist = makeMbArtist({
+        id: 'mbid-right',
+        name: 'Burial',
+        tags: [
+          { name: 'electronic', count: 10 },
+          { name: 'dubstep', count: 8 },
+        ],
+      })
+
+      const mb = makeMb()
+      mb.searchArtist = vi.fn().mockResolvedValue({
+        artists: [
+          { id: 'mbid-wrong', name: 'Burial', score: 100 },
+          { id: 'mbid-right', name: 'Burial', score: 95 },
+        ],
+      })
+      mb.lookupArtist = vi.fn().mockImplementation((mbid: string) => {
+        if (mbid === 'mbid-wrong') return Promise.resolve(wrongArtist)
+        if (mbid === 'mbid-right') return Promise.resolve(rightArtist)
+        return Promise.reject(new Error('not found'))
+      })
+
+      const result = await resolve(discovered, mb)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]?.mbid).toBe('mbid-right')
+    })
+
+    it('skips artist when AI provides genres but best MB candidate has zero overlap', async () => {
+      // Simulates the issue where AI confuses similarly-named artists:
+      // AI says "Digital Underground" with rock genres, but MB only finds the hip-hop group
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Digital Underground',
+          similarityScore: 0.8,
+          source: 'ai',
+          aiReasoning: 'Experimental rock pioneers...',
+          genres: ['rock', 'experimental', 'art rock'],
+        },
+      ]
+
+      const hipHopArtist = makeMbArtist({
+        id: 'mbid-du',
+        name: 'Digital Underground',
+        tags: [
+          { name: 'hip hop', count: 10 },
+          { name: 'rap', count: 8 },
+          { name: 'funk', count: 5 },
+        ],
+      })
+
+      const mb = makeMb()
+      mb.searchArtist = vi.fn().mockResolvedValue({
+        artists: [{ id: 'mbid-du', name: 'Digital Underground', score: 100 }],
+      })
+      mb.lookupArtist = vi.fn().mockResolvedValue(hipHopArtist)
+
+      const result = await resolve(discovered, mb)
+
+      // Should be dropped - genres completely mismatch
+      expect(result).toHaveLength(0)
+    })
+
+    it('accepts artist when AI provides genres but MB candidate has no tags', async () => {
+      // MB having no tags is common for lesser-known artists - should not reject
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Obscure Band',
+          similarityScore: 0.75,
+          source: 'ai',
+          genres: ['shoegaze', 'dream pop'],
+        },
+      ]
+
+      const untaggedArtist = makeMbArtist({
+        id: 'mbid-obscure',
+        name: 'Obscure Band',
+        tags: [], // no tags in MB
+      })
+
+      const mb = makeMb()
+      mb.searchArtist = vi.fn().mockResolvedValue({
+        artists: [{ id: 'mbid-obscure', name: 'Obscure Band', score: 90 }],
+      })
+      mb.lookupArtist = vi.fn().mockResolvedValue(untaggedArtist)
+
+      const result = await resolve(discovered, mb)
+
+      // Should be accepted - no tags to contradict, not a confirmed mismatch
+      expect(result).toHaveLength(1)
+      expect(result[0]?.mbid).toBe('mbid-obscure')
+    })
+
+    it('falls back to first MB result when no genre data available', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'SomeArtist', similarityScore: 0.8, source: 'lastfm' },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-first', name: 'SomeArtist' }))
+
+      const result = await resolve(discovered, mb)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]?.mbid).toBe('mbid-first')
+      // Only one lookup call (the first hit)
+      expect(mb.lookupArtist).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('imageFailed flag', () => {
+    it('sets imageFailed when Lidarr lookup returns no images', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'Obscure Artist', mbid: 'mbid-obscure', similarityScore: 0.7, source: 'ai' },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-obscure', name: 'Obscure Artist' }))
+      const mockLidarr = {
+        lookupArtist: vi.fn().mockResolvedValue([{ images: [] }]),
+      }
+
+      const result = await resolve(discovered, mb, undefined, mockLidarr)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]?.imageUrl).toBeUndefined()
+      expect(result[0]?.imageFailed).toBe(true)
+    })
+
+    it('does not set imageFailed when image is found', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'Famous Artist', mbid: 'mbid-famous', similarityScore: 0.9, source: 'ai' },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-famous', name: 'Famous Artist' }))
+      const mockLidarr = {
+        lookupArtist: vi
+          .fn()
+          .mockResolvedValue([
+            { images: [{ coverType: 'poster', remoteUrl: 'https://example.com/img.jpg' }] },
+          ]),
+      }
+
+      const result = await resolve(discovered, mb, undefined, mockLidarr)
+
+      expect(result).toHaveLength(1)
+      expect(result[0]?.imageUrl).toBe('https://example.com/img.jpg')
+      expect(result[0]?.imageFailed).toBeFalsy()
+    })
+  })
+
+  describe('suggestedAlbum resolution', () => {
+    it('exact album title match -> gets releaseGroupId', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'mbid-rh',
+          similarityScore: 0.9,
+          source: 'ai',
+          suggestedAlbum: 'OK Computer',
+        },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi.fn().mockResolvedValue([
+        { id: 'rg-okc', title: 'OK Computer', type: 'Album', firstReleaseDate: '1997-06-16' },
+        { id: 'rg-kid', title: 'Kid A', type: 'Album', firstReleaseDate: '2000-10-02' },
+      ])
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toEqual({
+        releaseGroupId: 'rg-okc',
+        title: 'OK Computer',
+        type: 'Album',
+        firstReleaseDate: '1997-06-16',
+      })
+    })
+
+    it('normalized match strips parenthetical suffix -> gets releaseGroupId', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'mbid-rh',
+          similarityScore: 0.9,
+          source: 'ai',
+          suggestedAlbum: 'OK Computer',
+        },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi.fn().mockResolvedValue([
+        {
+          id: 'rg-okc-deluxe',
+          title: 'OK Computer (Deluxe Edition)',
+          type: 'Album',
+          firstReleaseDate: '1997-06-16',
+        },
+      ])
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toEqual({
+        releaseGroupId: 'rg-okc-deluxe',
+        title: 'OK Computer (Deluxe Edition)',
+        type: 'Album',
+        firstReleaseDate: '1997-06-16',
+      })
+    })
+
+    it('unmatched album -> stored as free text without releaseGroupId', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'mbid-rh',
+          similarityScore: 0.9,
+          source: 'ai',
+          suggestedAlbum: 'Nonexistent Album',
+        },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi
+        .fn()
+        .mockResolvedValue([{ id: 'rg-okc', title: 'OK Computer', type: 'Album' }])
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toEqual({ title: 'Nonexistent Album' })
+      expect(result[0]?.suggestedAlbum?.releaseGroupId).toBeUndefined()
+    })
+
+    it('no suggestedAlbum -> result has no suggestedAlbum', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'Radiohead', mbid: 'mbid-rh', similarityScore: 0.9, source: 'ai' },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi.fn()
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toBeUndefined()
+      expect(mb.getReleaseGroups).not.toHaveBeenCalled()
+    })
+
+    it('getReleaseGroups not available -> falls back to free text', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'mbid-rh',
+          similarityScore: 0.9,
+          source: 'ai',
+          suggestedAlbum: 'OK Computer',
+        },
+      ]
+      // makeMb() does not include getReleaseGroups by default
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toEqual({ title: 'OK Computer' })
+    })
+
+    it('returns the matched release-group firstReleaseDate from matchSuggestedAlbum', async () => {
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-1',
+          name: 'Boards of Canada',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn().mockResolvedValue([
+          {
+            id: 'rg-mhtrtc',
+            title: 'Music Has the Right to Children',
+            type: 'Album',
+            firstReleaseDate: '1998-04-20',
+          },
+        ]),
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Boards of Canada',
+          mbid: 'artist-1',
+          similarityScore: 0.7,
+          source: 'ai',
+          suggestedAlbum: 'Music Has the Right to Children',
+        },
+      ]
+      const [resolved] = await resolve(discovered, mb as never)
+      expect(resolved?.suggestedAlbum).toMatchObject({
+        releaseGroupId: 'rg-mhtrtc',
+        title: 'Music Has the Right to Children',
+        firstReleaseDate: '1998-04-20',
+      })
+    })
+
+    it('promotes a matched AI suggestedAlbum to album-kind when the gate is on', async () => {
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-1',
+          name: 'Boards of Canada',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn().mockResolvedValue([
+          {
+            id: 'rg-mhtrtc',
+            title: 'Music Has the Right to Children',
+            type: 'Album',
+            firstReleaseDate: '1998-04-20',
+          },
+        ]),
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Boards of Canada',
+          mbid: 'artist-1',
+          similarityScore: 0.7,
+          source: 'ai',
+          suggestedAlbum: 'Music Has the Right to Children',
+        },
+      ]
+      const [withGate] = await resolve(
+        discovered,
+        mb as never,
+        undefined,
+        null,
+        null,
+        null,
+        null,
+        true,
+      )
+      expect(withGate?.kind).toBe('album')
+      expect(withGate?.releaseGroupMbid).toBe('rg-mhtrtc')
+      expect(withGate?.releaseDate).toBe('1998-04-20')
+
+      const [withoutGate] = await resolve(discovered, mb as never)
+      expect(withoutGate?.kind).toBeUndefined()
+    })
+
+    it('falls back to artist-kind when the gate is on but no release-group matched', async () => {
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-2',
+          name: 'Obscure Act',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn().mockResolvedValue([]),
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Obscure Act',
+          mbid: 'artist-2',
+          similarityScore: 0.7,
+          source: 'ai',
+          suggestedAlbum: 'Some Album',
+        },
+      ]
+      const [resolved] = await resolve(
+        discovered,
+        mb as never,
+        undefined,
+        null,
+        null,
+        null,
+        null,
+        true,
+      )
+      expect(resolved?.kind).toBeUndefined()
+    })
+
+    it("with no AI suggestion at all, falls back to the artist's most recent Album/EP when the gate is on", async () => {
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-3',
+          name: 'Boards of Canada',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn().mockResolvedValue([
+          {
+            id: 'rg-mhtrtc',
+            title: 'Music Has the Right to Children',
+            type: 'Album',
+            firstReleaseDate: '1998-04-20',
+          },
+          {
+            id: 'rg-tourist',
+            title: "Tomorrow's Harvest",
+            type: 'Album',
+            firstReleaseDate: '2013-06-10',
+          },
+        ]),
+      }
+      // No suggestedAlbum at all -- this is what a non-AI discovery mode
+      // (similar-artist-web, labels, listenbrainz, ...) produces.
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Boards of Canada',
+          mbid: 'artist-3',
+          similarityScore: 0.7,
+          source: 'similar-artist-web',
+        },
+      ]
+      const [resolved] = await resolve(
+        discovered,
+        mb as never,
+        undefined,
+        null,
+        null,
+        null,
+        null,
+        true,
+      )
+      expect(resolved?.kind).toBe('album')
+      expect(resolved?.releaseGroupMbid).toBe('rg-tourist')
+      expect(resolved?.releaseDate).toBe('2013-06-10')
+    })
+
+    it('with no AI suggestion and no release groups at all, does not promote to album-kind', async () => {
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-4',
+          name: 'Totally Obscure Artist',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn().mockResolvedValue([]),
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Totally Obscure Artist',
+          mbid: 'artist-4',
+          similarityScore: 0.7,
+          source: 'similar-artist-web',
+        },
+      ]
+      const [resolved] = await resolve(
+        discovered,
+        mb as never,
+        undefined,
+        null,
+        null,
+        null,
+        null,
+        true,
+      )
+      expect(resolved?.kind).toBeUndefined()
+      expect(resolved?.releaseGroupMbid).toBeUndefined()
+    })
+
+    it('does not fetch a fallback album when the gate is off, even with no AI suggestion', async () => {
+      const getReleaseGroups = vi
+        .fn()
+        .mockResolvedValue([
+          { id: 'rg-1', title: 'Some Album', type: 'Album', firstReleaseDate: '2000-01-01' },
+        ])
+      const mb = {
+        lookupArtist: vi.fn().mockResolvedValue({
+          id: 'artist-5',
+          name: 'Some Artist',
+          tags: [],
+          relations: [],
+          'life-span': {},
+        }),
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups,
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Some Artist',
+          mbid: 'artist-5',
+          similarityScore: 0.7,
+          source: 'similar-artist-web',
+        },
+      ]
+      const [resolved] = await resolve(discovered, mb as never)
+      expect(resolved?.kind).toBeUndefined()
+      expect(getReleaseGroups).not.toHaveBeenCalled()
+    })
+
+    it('getReleaseGroups throws -> falls back to free text', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'mbid-rh',
+          similarityScore: 0.9,
+          source: 'ai',
+          suggestedAlbum: 'OK Computer',
+        },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'mbid-rh', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi.fn().mockRejectedValue(new Error('MB rate limited'))
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.suggestedAlbum).toEqual({ title: 'OK Computer' })
+    })
+
+    it('emits album-kind from a release-group mbid without re-matching via MB', async () => {
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'artist-mbid',
+          similarityScore: 0.8,
+          source: 'release-radar',
+          suggestedAlbum: 'In Rainbows',
+          releaseGroupMbid: 'rg-in-rainbows',
+          releaseDate: '2007-10-10',
+        },
+      ]
+      const mb = makeMb(makeMbArtist({ id: 'artist-mbid', name: 'Radiohead' }))
+      mb.getReleaseGroups = vi.fn()
+
+      const [resolved] = await resolve(discovered, mb)
+
+      expect(resolved?.kind).toBe('album')
+      expect(resolved?.releaseGroupMbid).toBe('rg-in-rainbows')
+      expect(resolved?.releaseDate).toBe('2007-10-10')
+      expect(resolved?.suggestedAlbum).toEqual({
+        releaseGroupId: 'rg-in-rainbows',
+        title: 'In Rainbows',
+      })
+      expect(mb.getReleaseGroups).not.toHaveBeenCalled()
+    })
+
+    it('resolves every missing album for one artist into its own album-kind rec', async () => {
+      const lookupArtist = vi
+        .fn()
+        .mockResolvedValue(makeMbArtist({ id: 'artist-1', name: 'Radiohead', tags: [] }))
+      const mb = {
+        lookupArtist,
+        searchArtist: vi.fn(),
+        extractStreamingUrls: vi.fn().mockReturnValue({}),
+        getReleaseGroups: vi.fn(),
+      }
+      const discovered: DiscoveredArtist[] = [
+        {
+          name: 'Radiohead',
+          mbid: 'artist-1',
+          similarityScore: 0.8,
+          source: 'gap-fill',
+          suggestedAlbum: 'The Bends',
+          releaseGroupMbid: 'rg-bends',
+          releaseDate: '1995-03-13',
+        },
+        {
+          name: 'Radiohead',
+          mbid: 'artist-1',
+          similarityScore: 0.8,
+          source: 'gap-fill',
+          suggestedAlbum: 'OK Computer',
+          releaseGroupMbid: 'rg-okc',
+          releaseDate: '1997-06-16',
+        },
+      ]
+
+      const resolved = await resolve(discovered, mb as never)
+
+      expect(resolved).toHaveLength(2)
+      expect(resolved.every((r) => r.kind === 'album')).toBe(true)
+      expect(resolved.map((r) => r.releaseGroupMbid).sort()).toEqual(['rg-bends', 'rg-okc'])
+      expect(resolved.every((r) => r.mbid === 'artist-1')).toBe(true) // artist identity preserved
+      expect(lookupArtist).toHaveBeenCalledTimes(1) // cached: one lookup for two albums
+    })
+  })
+
+  describe('life-span era data', () => {
+    it('attaches beginYear and endYear from MB life-span', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'The Beatles', mbid: 'mbid-beatles', similarityScore: 0.9, source: 'ai' },
+      ]
+      const mb = makeMb(
+        makeMbArtist({
+          id: 'mbid-beatles',
+          name: 'The Beatles',
+          'life-span': { begin: '1960-08-17', end: '1970-04-10', ended: true },
+        }),
+      )
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.beginYear).toBe(1960)
+      expect(result[0]?.endYear).toBe(1970)
+    })
+
+    it('attaches only beginYear when end is absent (active artist)', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'Active Band', mbid: 'mbid-active', similarityScore: 0.8, source: 'ai' },
+      ]
+      const mb = makeMb(
+        makeMbArtist({
+          id: 'mbid-active',
+          name: 'Active Band',
+          'life-span': { begin: '1994', ended: false },
+        }),
+      )
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.beginYear).toBe(1994)
+      expect(result[0]?.endYear).toBeUndefined()
+    })
+
+    it('leaves beginYear and endYear undefined when life-span is absent', async () => {
+      const discovered: DiscoveredArtist[] = [
+        { name: 'No Dates', mbid: 'mbid-nodates', similarityScore: 0.7, source: 'ai' },
+      ]
+      const mb = makeMb(
+        makeMbArtist({
+          id: 'mbid-nodates',
+          name: 'No Dates',
+        }),
+      )
+
+      const result = await resolve(discovered, mb)
+
+      expect(result[0]?.beginYear).toBeUndefined()
+      expect(result[0]?.endYear).toBeUndefined()
+    })
+  })
+})
+
+describe('fetchArtistImage', () => {
+  const MBID = 'mbid-image'
+
+  function makeAudiodb(images: { url?: string; logoUrl?: string } = {}) {
+    return {
+      getArtistImages: vi.fn().mockResolvedValue(images),
+      searchArtistByName: vi.fn().mockResolvedValue({}),
+    }
+  }
+
+  function makeLidarr(images: Array<{ coverType: string; remoteUrl?: string }>) {
+    return {
+      lookupArtist: vi.fn().mockResolvedValue([{ images }]),
+    }
+  }
+
+  function makeFanart(images: { url?: string; logoUrl?: string }) {
+    return { getArtistImages: vi.fn().mockResolvedValue(images) }
+  }
+
+  function makeMusicinfo(images: { url?: string; logoUrl?: string }) {
+    return { lookupArtistImages: vi.fn().mockResolvedValue(images) }
+  }
+
+  it('short-circuits on AudioDB hit and never invokes fallbacks', async () => {
+    const audiodb = makeAudiodb({ url: 'https://audiodb/img.jpg' })
+    const lidarr = makeLidarr([{ coverType: 'poster', remoteUrl: 'https://lidarr/img.jpg' }])
+    const fanart = makeFanart({ url: 'https://fanart/img.jpg' })
+    const musicinfo = makeMusicinfo({ url: 'https://musicinfo/img.jpg' })
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      fanart as never,
+      musicinfo as never,
+    )
+
+    expect(result).toEqual({ url: 'https://audiodb/img.jpg', failed: false })
+    expect(audiodb.getArtistImages).toHaveBeenCalledTimes(1)
+    expect(lidarr.lookupArtist).not.toHaveBeenCalled()
+    expect(fanart.getArtistImages).not.toHaveBeenCalled()
+    expect(musicinfo.lookupArtistImages).not.toHaveBeenCalled()
+  })
+
+  it('returns fanart image when AudioDB misses and only fanart is configured', async () => {
+    const audiodb = makeAudiodb({})
+    const fanart = makeFanart({ url: 'https://fanart/img.jpg', logoUrl: 'https://fanart/logo.png' })
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      null,
+      fanart as never,
+      null,
+    )
+
+    expect(result).toEqual({
+      url: 'https://fanart/img.jpg',
+      logoUrl: 'https://fanart/logo.png',
+      failed: false,
+    })
+    expect(fanart.getArtistImages).toHaveBeenCalledWith(MBID)
+  })
+
+  it('prefers Lidarr over fanart when both return images (priority preserved despite concurrency)', async () => {
+    const audiodb = makeAudiodb({})
+    const lidarr = makeLidarr([{ coverType: 'poster', remoteUrl: 'https://lidarr/img.jpg' }])
+    const fanart = makeFanart({ url: 'https://fanart/img.jpg' })
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      fanart as never,
+      null,
+    )
+
+    expect(result.url).toBe('https://lidarr/img.jpg')
+    expect(result.failed).toBe(false)
+  })
+
+  it('falls through to fanart without an unhandled rejection when Lidarr throws', async () => {
+    const audiodb = makeAudiodb({})
+    const lidarr = { lookupArtist: vi.fn().mockRejectedValue(new Error('lidarr down')) }
+    const fanart = makeFanart({ url: 'https://fanart/img.jpg' })
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      fanart as never,
+      null,
+    )
+
+    expect(result.url).toBe('https://fanart/img.jpg')
+    expect(result.failed).toBe(false)
+    expect(warn).toHaveBeenCalledWith(
+      `[resolve] Lidarr image lookup failed for ${MBID}:`,
+      expect.any(Error),
+    )
+    warn.mockRestore()
+  })
+
+  it('does not cache a partial miss when another shared provider fails', async () => {
+    const audiodb = makeAudiodb({})
+    const lidarr = { lookupArtist: vi.fn().mockRejectedValue(new Error('lidarr down')) }
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      null,
+      null,
+    )
+
+    expect(result).toEqual({ failed: false })
+    warn.mockRestore()
+  })
+
+  it('does not cache fallback misses when AudioDB was rate-limited', async () => {
+    const audiodb = {
+      getArtistImages: vi.fn().mockRejectedValue(new RateLimitedError()),
+      searchArtistByName: vi.fn(),
+    }
+    const lidarr = makeLidarr([])
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      null,
+      null,
+    )
+
+    expect(result).toEqual({ failed: false })
+  })
+
+  it('does not share a negative cache when a user-scoped fallback misses', async () => {
+    const audiodb = makeAudiodb({})
+    const lidarr = makeLidarr([])
+    const fanart = makeFanart({})
+    const musicinfo = makeMusicinfo({})
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      audiodb as never,
+      lidarr as never,
+      fanart as never,
+      musicinfo as never,
+    )
+
+    expect(result).toEqual({ failed: false })
+  })
+
+  it('reports failed when AudioDB is the only configured source and misses', async () => {
+    const audiodb = makeAudiodb({})
+
+    const result = await fetchArtistImage(MBID, 'Test Artist', audiodb as never)
+
+    expect(result).toEqual({ failed: true })
+  })
+
+  it('does not create a shared negative cache from user-scoped provider misses', async () => {
+    const lidarr = makeLidarr([])
+    const fanart = makeFanart({})
+
+    const result = await fetchArtistImage(
+      MBID,
+      'Test Artist',
+      null,
+      lidarr as never,
+      fanart as never,
+      null,
+    )
+
+    expect(result).toEqual({ failed: false })
+  })
+})

@@ -1,0 +1,175 @@
+// @vitest-environment node
+import { describe, expect, it, vi } from 'vitest'
+
+vi.mock('@/core/clients/plex', () => ({
+  createPlexClient: vi.fn(),
+}))
+
+const { createPlexClient } = await import('@/core/clients/plex')
+const { createPlexSource } = await import('@/core/plugins/plex')
+
+describe('createPlexSource()', () => {
+  function mockClient() {
+    const client = {
+      getMusicSectionId: vi.fn().mockResolvedValue('1'),
+      getMusicSections: vi.fn().mockResolvedValue([{ key: '1', title: 'Music' }]),
+      getTopArtists: vi.fn().mockResolvedValue([
+        { name: 'Radiohead', viewCount: 500, ratingKey: '100' },
+        { name: 'Bjork', viewCount: 300, ratingKey: '101' },
+      ]),
+      getAllArtists: vi.fn().mockResolvedValue([]),
+      getAlbumsForArtist: vi.fn().mockResolvedValue([]),
+      getTracksForArtist: vi.fn().mockResolvedValue([]),
+      searchTracksByTitle: vi.fn().mockResolvedValue([]),
+      getRecentlyPlayed: vi.fn().mockResolvedValue({
+        tracks: [
+          { artistName: 'Portishead', trackName: 'Wandering Star', viewedAt: 1710000000000 },
+          { artistName: 'Massive Attack', trackName: 'Teardrop', viewedAt: 1709990000000 },
+        ],
+        total: 2,
+      }),
+      getRecentlyPlayedSince: vi.fn().mockResolvedValue([]),
+      getRecentlyAddedAlbums: vi.fn().mockResolvedValue([]),
+      getFavoriteTracks: vi.fn().mockResolvedValue([]),
+      getServerName: vi.fn().mockResolvedValue(null),
+      testConnection: vi.fn().mockResolvedValue({ success: true, message: 'Connected' }),
+    }
+    vi.mocked(createPlexClient).mockReturnValue(client)
+    return client
+  }
+
+  it('has id "plex" and name "Plex"', () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    expect(source.id).toBe('plex')
+    expect(source.name).toBe('Plex')
+  })
+
+  it('has correct capabilities', () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    expect(source.capabilities).toContain('topArtists')
+    expect(source.capabilities).toContain('recentListening')
+    expect(source.capabilities).toContain('listeningActivity')
+    expect(source.capabilities).not.toContain('similarArtists')
+    expect(source.capabilities).not.toContain('genreArtists')
+  })
+
+  it('getTopArtists() maps viewCount to playCount', async () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    const artists = await source.getTopArtists()
+
+    expect(artists).toHaveLength(2)
+    expect(artists[0]).toEqual({
+      name: 'Radiohead',
+      playCount: 500,
+      source: 'plex',
+    })
+    expect(artists[1]).toEqual({
+      name: 'Bjork',
+      playCount: 300,
+      source: 'plex',
+    })
+  })
+
+  it('getTopArtists() passes limit to client', async () => {
+    const client = mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    await source.getTopArtists(10)
+
+    expect(client.getTopArtists).toHaveBeenCalledWith(10)
+  })
+
+  it('getRecentListening() maps client response', async () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    const tracks = await source.getRecentListening?.()
+
+    expect(tracks).toHaveLength(2)
+    expect(tracks?.[0]).toEqual({
+      name: 'Portishead',
+      track: 'Wandering Star',
+      playedAt: new Date(1710000000000),
+    })
+    expect(tracks?.[1]).toEqual({
+      name: 'Massive Attack',
+      track: 'Teardrop',
+      playedAt: new Date(1709990000000),
+    })
+  })
+
+  it('getRecentListening() passes limit to client', async () => {
+    const client = mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    await source.getRecentListening?.(25)
+
+    expect(client.getRecentlyPlayed).toHaveBeenCalledWith(25)
+  })
+
+  it('getSimilarArtists() returns empty array', async () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    const similar = await source.getSimilarArtists('Radiohead', 'mbid-rh')
+
+    expect(similar).toEqual([])
+  })
+
+  it('testConnection() delegates to client', async () => {
+    const client = mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    const result = await source.testConnection()
+
+    expect(result).toEqual({ success: true, message: 'Connected' })
+    expect(client.testConnection).toHaveBeenCalled()
+  })
+
+  it('getListeningActivity() buckets recent plays into weeks', async () => {
+    const client = mockClient()
+    const now = Date.now()
+    const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+    client.getRecentlyPlayedSince.mockResolvedValue([
+      { artistName: 'A', trackName: 'a1', viewedAt: now - 1000 }, // this week
+      { artistName: 'B', trackName: 'b1', viewedAt: now - 2000 }, // this week
+      { artistName: 'C', trackName: 'c1', viewedAt: now - WEEK_MS - 1000 }, // last week
+      { artistName: 'D', trackName: 'd1', viewedAt: now - 20 * WEEK_MS }, // outside window, dropped
+    ])
+
+    const source = createPlexSource('http://plex:32400', 'token')
+    const activity = await source.getListeningActivity?.()
+
+    expect(client.getRecentlyPlayedSince).toHaveBeenCalledWith(expect.any(Number))
+    expect(activity).toHaveLength(2)
+    const thisWeek = activity?.find((e) => e.listen_count === 2)
+    const lastWeek = activity?.find((e) => e.listen_count === 1)
+    expect(thisWeek).toBeDefined()
+    expect(lastWeek).toBeDefined()
+  })
+
+  it('getListeningActivity() returns empty array with no history', async () => {
+    const client = mockClient()
+    client.getRecentlyPlayedSince.mockResolvedValue([])
+    const source = createPlexSource('http://plex:32400', 'token')
+    const activity = await source.getListeningActivity?.()
+    expect(activity).toEqual([])
+  })
+
+  it('passes admin token and username through to the client for history scoping', () => {
+    mockClient()
+    createPlexSource('http://plex:32400', 'token', null, {
+      adminToken: 'admin-token',
+      username: 'jordan',
+    })
+    expect(createPlexClient).toHaveBeenCalledWith('http://plex:32400', 'token', {
+      sectionId: null,
+      historyToken: 'admin-token',
+      username: 'jordan',
+    })
+  })
+
+  it('does not have getGenreArtists', () => {
+    mockClient()
+    const source = createPlexSource('http://plex:32400', 'token')
+    expect(source.getGenreArtists).toBeUndefined()
+  })
+})

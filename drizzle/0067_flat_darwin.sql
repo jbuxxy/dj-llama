@@ -1,0 +1,1 @@
+ALTER TABLE "track_album_resolution_cache" ADD COLUMN "artist_mbid" uuid;

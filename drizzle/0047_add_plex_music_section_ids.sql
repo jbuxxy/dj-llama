@@ -1,0 +1,1 @@
+ALTER TABLE "settings" ADD COLUMN "plex_music_section_ids" text[];
