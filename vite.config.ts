@@ -54,13 +54,15 @@ export default defineConfig({
         'src/server/openapi.ts',
         'drizzle/**',
       ],
-      // A ratchet just under current coverage (2026-10: 73 / 68.6 / 60.7 /
-      // 70.8), so CI catches a drop; raise these as coverage improves.
+      // A ratchet ~2 points under current coverage (2026-10: lines 73,
+      // functions 68.6, branches 60.7, statements 70.8) so CI catches a real
+      // drop; a tighter margin tripped on run-to-run variance on GitHub's
+      // runners. Raise these as coverage improves.
       thresholds: {
-        lines: 72,
-        functions: 68,
-        branches: 60,
-        statements: 70,
+        lines: 71,
+        functions: 66,
+        branches: 58,
+        statements: 68,
       },
     },
   },

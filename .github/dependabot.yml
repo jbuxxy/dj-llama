@@ -12,6 +12,10 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    groups:
+      # init, analyze and upload-sarif must stay on the same CodeQL version.
+      codeql:
+        patterns: ["github/codeql-action*"]
   - package-ecosystem: docker
     directory: /deploy/docker
     schedule:
