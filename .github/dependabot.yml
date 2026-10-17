@@ -8,6 +8,13 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # jsdom 30 breaks vitest 5's jsdom environment ("'addEventListener'
+      # called on an object that is not a valid instance of EventTarget" in
+      # catchWindowErrors), so every web test fails to start. Drop this once
+      # a vitest release supports it.
+      - dependency-name: jsdom
+        versions: [">=30"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
