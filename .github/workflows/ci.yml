@@ -55,14 +55,23 @@ jobs:
       - run: bun run typecheck
       - run: bun run db:migrate
       - name: Test with coverage
-        run: bun run test:coverage
-      # Job logs need a token to read; annotations are public, so surface the
-      # coverage totals there when the step fails (e.g. a threshold miss).
-      - name: Report coverage on failure
+        run: |
+          set -o pipefail
+          bun run test:coverage 2>&1 | tee vitest.log
+      # Job logs need a token to read; annotations are public, so surface what
+      # went wrong there: coverage totals, failing tests and unhandled errors,
+      # and the end of the run.
+      - name: Report test failure
         if: failure()
         run: |
-          [ -f coverage/coverage-summary.json ] || exit 0
-          jq -r '.total | "::error title=Coverage::lines \(.lines.pct)%, functions \(.functions.pct)%, branches \(.branches.pct)%, statements \(.statements.pct)%"' coverage/coverage-summary.json
+          if [ -f coverage/coverage-summary.json ]; then
+            jq -r '.total | "::error title=Coverage::lines \(.lines.pct)%, functions \(.functions.pct)%, branches \(.branches.pct)%, statements \(.statements.pct)%"' coverage/coverage-summary.json
+          fi
+          [ -f vitest.log ] || exit 0
+          # Annotation messages are one line; %0A is a newline in them.
+          annotate() { sed -e 's/\x1b\[[0-9;]*m//g' | awk 'BEGIN{ORS="%0A"} {print}'; }
+          echo "::error title=Failures and errors::$(grep -E 'FAIL|Error|Unhandled|ELIFECYCLE|Timeout|timed out|Killed|heap' vitest.log | head -40 | annotate)"
+          echo "::error title=End of test output::$(tail -40 vitest.log | annotate)"
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
