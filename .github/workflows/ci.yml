@@ -70,8 +70,11 @@ jobs:
           [ -f vitest.log ] || exit 0
           # Annotation messages are one line; %0A is a newline in them.
           annotate() { sed -e 's/\x1b\[[0-9;]*m//g' | awk 'BEGIN{ORS="%0A"} {print}'; }
-          echo "::error title=Failures and errors::$(grep -E 'FAIL|Error|Unhandled|ELIFECYCLE|Timeout|timed out|Killed|heap' vitest.log | head -40 | annotate)"
-          echo "::error title=End of test output::$(tail -40 vitest.log | annotate)"
+          clean() { sed -e 's/\x1b\[[0-9;]*m//g' vitest.log; }
+          # Vitest's summary and threshold errors (the run's verdict).
+          echo "::error title=Test summary::$(clean | grep -E 'Test Files |Tests  |Errors  |ERROR:|exited with code' | annotate)"
+          # The failed-test / unhandled-error sections, up to the summary.
+          echo "::error title=Failed tests::$(clean | awk '/Failed Tests|Unhandled Error|Unhandled Rejection|^ *FAIL /{p=1} p{print} /Test Files /{exit}' | head -80 | annotate)"
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
