@@ -36,12 +36,25 @@ export async function makeTestDb() {
   await admin.end()
 
   const pool = new pg.Pool({ connectionString: urlForDatabase(dbName) })
+  // close()'s DROP DATABASE ... WITH (FORCE) terminates any connection still
+  // shutting down: the client emits 57P01, then "Connection terminated
+  // unexpectedly". With no 'error' listener that becomes an uncaught
+  // exception, which fails the whole vitest run even though every test passed
+  // -- it hit about half of CI runs, depending on timing. Swallow connection
+  // errors once close() has begun; before that they still surface.
+  let closing = false
+  const ignoreWhileClosing = (err: Error) => {
+    if (!closing) throw err
+  }
+  pool.on('error', ignoreWhileClosing)
+  pool.on('connect', (client) => client.on('error', ignoreWhileClosing))
   const db = drizzle(pool, { schema })
   await migrate(db, { migrationsFolder: './drizzle' })
 
   return {
     db,
     close: async () => {
+      closing = true
       await pool.end()
       const cleanup = new pg.Pool({ connectionString: DATABASE_URL })
       await cleanup.query(`DROP DATABASE IF EXISTS "${dbName}" WITH (FORCE)`)
