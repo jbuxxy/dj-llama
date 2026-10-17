@@ -52,6 +52,7 @@ import {
   type PlaylistMissingTrack,
   type PlaylistRow,
   type PlaylistTrackRow,
+  setAdminImportedPlaylistEnabledApi,
   updatePlaylistApi,
   updateSettings,
 } from '../lib/api'
@@ -1211,16 +1212,18 @@ function ImportPlaylistSection({
 // merged into ImportPlaylistSection above, which is scoped to the viewer's
 // own imports) since it reads a different endpoint and shows an owner column
 // the personal list has no use for.
+const ADMIN_IMPORTS_QUERY_KEY = ['playlists', 'admin-imports'] as const
+
 function AdminImportedPlaylistsSection() {
   const queryClient = useQueryClient()
 
   const { data: rows = [], isLoading } = useQuery<AdminImportedPlaylistRow[]>({
-    queryKey: ['playlists', 'admin-imports'],
+    queryKey: ADMIN_IMPORTS_QUERY_KEY,
     queryFn: getAdminImportedPlaylists,
   })
 
   function refetch() {
-    queryClient.invalidateQueries({ queryKey: ['playlists', 'admin-imports'] })
+    queryClient.invalidateQueries({ queryKey: ADMIN_IMPORTS_QUERY_KEY })
   }
 
   if (!isLoading && rows.length === 0) return null
@@ -1229,7 +1232,7 @@ function AdminImportedPlaylistsSection() {
     <CollapsibleCard
       defaultCollapsed
       title="Imported Playlists — All Users"
-      subtitle="Every user's imported playlist in one place -- regenerate or remove any of them."
+      subtitle="Every user's imported playlist in one place -- regenerate, pause, or remove any of them."
     >
       {isLoading ? (
         <Skeleton className="h-16 w-full" />
@@ -1262,9 +1265,20 @@ function AdminImportedPlaylistsSection() {
                       {`${row.trackCount} in Plex`}
                     </span>
                   )}
+                  {/* Paused imports never refresh on their own; say so rather
+                      than leave them looking scheduled. */}
+                  <span className={`text-xs ${row.enabled ? 'text-muted' : 'text-warning'}`}>
+                    {row.enabled ? formatSchedule(row.schedule) : 'Paused'}
+                  </span>
                 </div>
               </div>
               <div className="flex items-center gap-2 shrink-0">
+                <EnabledToggle
+                  playlistId={row.id}
+                  enabled={row.enabled}
+                  updateFn={setAdminImportedPlaylistEnabledApi}
+                  queryKey={ADMIN_IMPORTS_QUERY_KEY}
+                />
                 <GenerateButton
                   playlistId={row.id}
                   onGenerated={refetch}

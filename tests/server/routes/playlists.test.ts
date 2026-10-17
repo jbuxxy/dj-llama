@@ -347,6 +347,65 @@ describe('PATCH /api/v1/playlists/:id', () => {
   })
 })
 
+describe('PATCH /api/v1/playlists/admin/:id', () => {
+  const importPlaylist = { ...mockPlaylist, id: 7, userId: 99, strategy: 'import' }
+
+  beforeEach(async () => {
+    const { getPlaylistWithTracks } = vi.mocked(await import('@/db/queries/playlists'))
+    getPlaylistWithTracks.mockImplementation(async (_db, id) => {
+      if (id === 7) return { playlist: importPlaylist, tracks: [] } as never
+      if (id === 1) return { playlist: mockPlaylist, tracks: [mockTrack] } as never
+      return null
+    })
+  })
+
+  function patch(app: Hono, id: number, body: unknown) {
+    return app.request(`/api/v1/playlists/admin/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+  }
+
+  it("lets an admin pause and resume another user's imported playlist", async () => {
+    const { updatePlaylist } = vi.mocked(await import('@/db/queries/playlists'))
+    const deps = makeDeps({ getUserById: vi.fn().mockResolvedValue({ isAdmin: true }) })
+    const app = createTestApp(deps, USER_ID)
+
+    expect((await patch(app, 7, { enabled: false })).status).toBe(204)
+    expect(updatePlaylist).toHaveBeenLastCalledWith(expect.anything(), 7, { enabled: false })
+    expect((await patch(app, 7, { enabled: true })).status).toBe(204)
+    expect(updatePlaylist).toHaveBeenLastCalledWith(expect.anything(), 7, { enabled: true })
+    expect(deps.restartPlaylistScheduler).toHaveBeenCalledTimes(2)
+  })
+
+  it('rejects non-admins', async () => {
+    const { updatePlaylist } = vi.mocked(await import('@/db/queries/playlists'))
+    const app = createTestApp(makeDeps(), USER_ID)
+    expect((await patch(app, 7, { enabled: true })).status).toBe(403)
+    expect(updatePlaylist).not.toHaveBeenCalled()
+  })
+
+  it('only touches imported playlists', async () => {
+    const { updatePlaylist } = vi.mocked(await import('@/db/queries/playlists'))
+    const app = createTestApp(
+      makeDeps({ getUserById: vi.fn().mockResolvedValue({ isAdmin: true }) }),
+      USER_ID,
+    )
+    expect((await patch(app, 1, { enabled: false })).status).toBe(404)
+    expect((await patch(app, 404, { enabled: false })).status).toBe(404)
+    expect(updatePlaylist).not.toHaveBeenCalled()
+  })
+
+  it('accepts only the enabled field', async () => {
+    const app = createTestApp(
+      makeDeps({ getUserById: vi.fn().mockResolvedValue({ isAdmin: true }) }),
+      USER_ID,
+    )
+    expect((await patch(app, 7, { enabled: true, schedule: '* * * * *' })).status).toBe(400)
+  })
+})
+
 describe('DELETE /api/v1/playlists/:id', () => {
   it('deletes playlist for owner', async () => {
     const deps = makeDeps()

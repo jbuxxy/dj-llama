@@ -241,20 +241,32 @@ export function DeleteButton({
 // click landing mid-flight. PlaylistCard used to skip the optimistic update
 // (so its toggle lagged until the next refetch) while CuratedPlaylistsSection
 // had it; unified here so every row behaves the same way.
-export function EnabledToggle({ playlistId, enabled }: { playlistId: number; enabled: boolean }) {
+// updateFn/queryKey let the admin All Users list reuse it against its own
+// endpoint and cache, the same way GenerateButton/DeleteButton take theirs.
+export function EnabledToggle({
+  playlistId,
+  enabled,
+  updateFn = (id, next) => updatePlaylistApi(id, { enabled: next }),
+  queryKey = ['playlists'],
+}: {
+  playlistId: number
+  enabled: boolean
+  updateFn?: (id: number, enabled: boolean) => Promise<unknown>
+  queryKey?: readonly unknown[]
+}) {
   const queryClient = useQueryClient()
   const [toggling, setToggling] = useState(false)
 
   async function handleToggle(next: boolean) {
     if (toggling) return
     setToggling(true)
-    queryClient.setQueryData<PlaylistRow[]>(['playlists'], (old) =>
+    queryClient.setQueryData<PlaylistRow[]>(queryKey, (old) =>
       old?.map((p) => (p.id === playlistId ? { ...p, enabled: next } : p)),
     )
     try {
-      await updatePlaylistApi(playlistId, { enabled: next })
+      await updateFn(playlistId, next)
     } catch {
-      queryClient.setQueryData<PlaylistRow[]>(['playlists'], (old) =>
+      queryClient.setQueryData<PlaylistRow[]>(queryKey, (old) =>
         old?.map((p) => (p.id === playlistId ? { ...p, enabled: !next } : p)),
       )
       toast.error('Failed to update playlist')

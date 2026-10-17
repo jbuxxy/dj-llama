@@ -1127,6 +1127,12 @@ export const generateAdminImportedPlaylistApi = (id: number) =>
 export const deleteAdminImportedPlaylistApi = (id: number) =>
   fetchApi<void>(`/playlists/admin/${id}`, { method: 'DELETE' })
 
+export const setAdminImportedPlaylistEnabledApi = (id: number, enabled: boolean) =>
+  fetchApi<void>(`/playlists/admin/${id}`, {
+    method: 'PATCH',
+    body: JSON.stringify({ enabled }),
+  })
+
 export const duplicatePlaylistApi = (id: number, name?: string) =>
   fetchApi<{ pushed: boolean; itemsAdded: number }>(`/playlists/${id}/duplicate`, {
     method: 'POST',

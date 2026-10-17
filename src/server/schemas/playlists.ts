@@ -93,6 +93,10 @@ export const updatePlaylistSchema = z
   })
   .strict()
 
+// Admin pause/resume of another user's imported playlist -- the only field
+// the admin can change; everything else stays the owner's.
+export const adminSetPlaylistEnabledSchema = z.object({ enabled: z.boolean() }).strict()
+
 export const playlistTrackAddSchema = z.object({
   artistName: z.string().trim().min(1).max(500),
   trackName: z.string().trim().min(1).max(500),

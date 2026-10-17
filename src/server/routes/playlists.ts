@@ -34,6 +34,7 @@ import { encodeCursor } from '@/server/helpers/pagination-cursor'
 import { notFoundProblem, problem } from '@/server/helpers/problem'
 import { requireAdmin } from '@/server/helpers/require-user'
 import {
+  adminSetPlaylistEnabledSchema,
   createPlaylistSchema,
   duplicatePlaylistSchema,
   missingTrackIdParamSchema,
@@ -609,6 +610,35 @@ export function playlistRoutes(deps: PlaylistDeps) {
 
     return c.json({ status: 'generating' }, 202)
   })
+
+  // Admin pause/resume of any user's imported playlist, so the owner can see
+  // and fix a paused import from the All Users list. Imports only: other
+  // strategies' schedules stay entirely the owning user's business.
+  router.patch(
+    '/api/v1/playlists/admin/:id',
+    zParam(playlistIdParamSchema),
+    zJson(adminSetPlaylistEnabledSchema),
+    async (c) => {
+      const auth = await requireAdmin(c, deps.getUserById)
+      if (!auth.ok) return auth.response
+
+      const { id } = c.req.valid('param')
+      const existing = await getPlaylistWithTracks(db, id)
+      if (existing?.playlist.strategy !== 'import') {
+        return notFoundProblem(
+          c,
+          'playlist-not-found',
+          'Playlist not found',
+          'errors.playlist.notFound',
+        )
+      }
+
+      const { enabled } = c.req.valid('json')
+      await updatePlaylist(db, id, { enabled })
+      await deps.restartPlaylistScheduler()
+      return c.body(null, 204)
+    },
+  )
 
   router.delete('/api/v1/playlists/admin/:id', zParam(playlistIdParamSchema), async (c) => {
     const auth = await requireAdmin(c, deps.getUserById)
