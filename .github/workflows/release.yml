@@ -1,0 +1,23 @@
+name: Release
+
+# A vYYYY.M.N tag gets a GitHub Release with notes generated from the commits
+# since the previous tag. docker-publish.yml builds the image for the same tag.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --verify-tag \
+            --title "DJ Llama ${TAG#v}" --generate-notes \
+            --notes "Docker image: \`ghcr.io/${GITHUB_REPOSITORY,,}:${TAG#v}\` (also \`:stable\`)"
