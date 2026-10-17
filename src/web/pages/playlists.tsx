@@ -1239,7 +1239,10 @@ function AdminImportedPlaylistsSection() {
       ) : (
         <div className="divide-y divide-border">
           {rows.map((row) => (
-            <div key={row.id} className="py-2.5 flex items-center gap-2.5">
+            // Same shape as the Curated rows above: title on its own line,
+            // then a wrapping actions row, then one line of detail -- so
+            // nothing gets squeezed into a narrow column beside the buttons.
+            <div key={row.id} className="py-2.5 flex items-start gap-2.5">
               <PlaylistCover
                 name={row.name}
                 coverUrl={row.coverUrl}
@@ -1247,49 +1250,54 @@ function AdminImportedPlaylistsSection() {
               />
               <div className="flex-1 min-w-0">
                 <p className="text-sm text-text truncate">{row.name}</p>
-                <div className="flex items-center flex-wrap gap-x-2 gap-y-1 mt-0.5">
-                  {row.config?.importSource && (
-                    <ImportSourceBadge
-                      source={row.config.importSource}
-                      url={row.config.importPlaylistId}
+                <div className="flex items-center justify-between flex-wrap gap-2 mt-1.5">
+                  <div className="flex items-center flex-wrap gap-2 min-w-0">
+                    {row.config?.importSource && (
+                      <ImportSourceBadge
+                        source={row.config.importSource}
+                        url={row.config.importPlaylistId}
+                      />
+                    )}
+                    {row.trackCount != null && (
+                      <span
+                        className="text-xs text-muted"
+                        title="Tracks currently matched into this Plex playlist -- may be fewer than the source playlist's total if some songs aren't in your library. See missing tracks below."
+                      >
+                        {`${row.trackCount} in Plex`}
+                      </span>
+                    )}
+                    <GenerateButton
+                      playlistId={row.id}
+                      onGenerated={refetch}
+                      generateFn={generateAdminImportedPlaylistApi}
                     />
-                  )}
-                  <span className="text-xs text-muted">
-                    Owner: <span className="text-text font-medium">{row.ownerUsername}</span>
-                  </span>
-                  {row.trackCount != null && (
-                    <span
-                      className="text-xs text-muted"
-                      title="Tracks currently matched into this Plex playlist -- may be fewer than the source playlist's total if some songs aren't in your library. See missing tracks below."
-                    >
-                      {`${row.trackCount} in Plex`}
-                    </span>
-                  )}
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <EnabledToggle
+                      playlistId={row.id}
+                      enabled={row.enabled}
+                      updateFn={setAdminImportedPlaylistEnabledApi}
+                      queryKey={ADMIN_IMPORTS_QUERY_KEY}
+                    />
+                    <DeleteButton
+                      playlistId={row.id}
+                      onDeleted={refetch}
+                      deleteFn={deleteAdminImportedPlaylistApi}
+                      className="p-1.5 text-muted hover:text-reject transition-colors"
+                    />
+                  </div>
+                </div>
+                <p className="text-xs text-muted mt-1 truncate">
+                  Owner: <span className="text-text font-medium">{row.ownerUsername}</span>
+                  {' · '}
                   {/* Paused imports never refresh on their own; say so rather
                       than leave them looking scheduled. */}
-                  <span className={`text-xs ${row.enabled ? 'text-muted' : 'text-warning'}`}>
-                    {row.enabled ? formatSchedule(row.schedule) : 'Paused'}
-                  </span>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <EnabledToggle
-                  playlistId={row.id}
-                  enabled={row.enabled}
-                  updateFn={setAdminImportedPlaylistEnabledApi}
-                  queryKey={ADMIN_IMPORTS_QUERY_KEY}
-                />
-                <GenerateButton
-                  playlistId={row.id}
-                  onGenerated={refetch}
-                  generateFn={generateAdminImportedPlaylistApi}
-                />
-                <DeleteButton
-                  playlistId={row.id}
-                  onDeleted={refetch}
-                  deleteFn={deleteAdminImportedPlaylistApi}
-                  className="p-1.5 text-muted hover:text-reject transition-colors"
-                />
+                  {row.enabled ? (
+                    formatSchedule(row.schedule)
+                  ) : (
+                    <span className="text-warning">Paused</span>
+                  )}
+                </p>
               </div>
             </div>
           ))}
