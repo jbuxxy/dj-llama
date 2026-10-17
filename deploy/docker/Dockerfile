@@ -18,8 +18,10 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ARG DJLLAMA_GIT_SHA=dev
 ARG DJLLAMA_CHANNEL=local
+ARG DJLLAMA_VERSION=""
 ENV DJLLAMA_GIT_SHA=${DJLLAMA_GIT_SHA}
 ENV DJLLAMA_CHANNEL=${DJLLAMA_CHANNEL}
+ENV DJLLAMA_VERSION=${DJLLAMA_VERSION}
 ENV NODE_ENV=production
 RUN bun run build
 
@@ -38,8 +40,10 @@ FROM ${RUNTIME_IMAGE}
 # identity in the runtime image as well as the builder stage.
 ARG DJLLAMA_GIT_SHA=dev
 ARG DJLLAMA_CHANNEL=local
+ARG DJLLAMA_VERSION=""
 ENV DJLLAMA_GIT_SHA=${DJLLAMA_GIT_SHA}
 ENV DJLLAMA_CHANNEL=${DJLLAMA_CHANNEL}
+ENV DJLLAMA_VERSION=${DJLLAMA_VERSION}
 
 LABEL org.opencontainers.image.source="https://github.com/jbuxxy/dj-llama"
 LABEL org.opencontainers.image.licenses="MIT"

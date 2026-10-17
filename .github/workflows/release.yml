@@ -1,16 +1,53 @@
 name: Release
 
-# A vYYYY.M.N tag gets a GitHub Release with notes generated from the commits
-# since the previous tag. docker-publish.yml builds the image for the same tag.
+# Nightly (schedule / manual dispatch): cuts a vYYYY.M.N release if main has
+# releasable commits since the last tag (.github/scripts/nightly-release.sh
+# has the rules), with Features / Fixes notes, then dispatches
+# docker-publish.yml for the tag (:X + :stable). "dry run" prints the notes
+# without releasing.
+#
+# Tag push: a vYYYY.M.N tag pushed by hand gets a GitHub Release with notes
+# generated from the commits since the previous tag. (The nightly's own tag
+# is created with GITHUB_TOKEN, which doesn't fire this.)
 on:
+  schedule:
+    # 11:45 PM Denver during daylight time, 10:45 PM in winter.
+    - cron: "45 5 * * *"
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Print the release notes without creating a release
+        type: boolean
+        default: false
   push:
     tags: ["v*"]
 
 permissions:
   contents: write
+  actions: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  release:
+  nightly:
+    if: github.event_name != 'push'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - run: .github/scripts/nightly-release.sh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APP_TITLE: DJ Llama
+          PUBLISH_WORKFLOW: docker-publish.yml
+          DRY_RUN: ${{ inputs.dry_run || false }}
+
+  tagged:
+    if: github.event_name == 'push'
     runs-on: ubuntu-24.04
     steps:
       - name: Create release

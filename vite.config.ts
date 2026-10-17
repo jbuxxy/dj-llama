@@ -9,6 +9,7 @@ export default defineConfig({
   define: {
     'process.env.DJLLAMA_GIT_SHA': JSON.stringify(process.env.DJLLAMA_GIT_SHA ?? 'dev'),
     'process.env.DJLLAMA_CHANNEL': JSON.stringify(process.env.DJLLAMA_CHANNEL ?? 'local'),
+    'process.env.DJLLAMA_VERSION': JSON.stringify(process.env.DJLLAMA_VERSION ?? ''),
   },
   resolve: {
     alias: { '@': path.resolve(__dirname, './src') },
