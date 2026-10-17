@@ -8,6 +8,7 @@ import {
   Pencil,
   Plus,
   Upload,
+  User,
   X,
 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
@@ -1239,9 +1240,9 @@ function AdminImportedPlaylistsSection() {
       ) : (
         <div className="divide-y divide-border">
           {rows.map((row) => (
-            // Same shape as the Curated rows above: title on its own line,
-            // then a wrapping actions row, then one line of detail -- so
-            // nothing gets squeezed into a narrow column beside the buttons.
+            // Three short lines, so nothing gets squeezed into a narrow column
+            // beside the buttons: title with the pause toggle and delete,
+            // then source, count and Generate, then owner and schedule.
             <div key={row.id} className="py-2.5 flex items-start gap-2.5">
               <PlaylistCover
                 name={row.name}
@@ -1249,30 +1250,9 @@ function AdminImportedPlaylistsSection() {
                 collageUrls={row.collageUrls}
               />
               <div className="flex-1 min-w-0">
-                <p className="text-sm text-text truncate">{row.name}</p>
-                <div className="flex items-center justify-between flex-wrap gap-2 mt-1.5">
-                  <div className="flex items-center flex-wrap gap-2 min-w-0">
-                    {row.config?.importSource && (
-                      <ImportSourceBadge
-                        source={row.config.importSource}
-                        url={row.config.importPlaylistId}
-                      />
-                    )}
-                    {row.trackCount != null && (
-                      <span
-                        className="text-xs text-muted"
-                        title="Tracks currently matched into this Plex playlist -- may be fewer than the source playlist's total if some songs aren't in your library. See missing tracks below."
-                      >
-                        {`${row.trackCount} in Plex`}
-                      </span>
-                    )}
-                    <GenerateButton
-                      playlistId={row.id}
-                      onGenerated={refetch}
-                      generateFn={generateAdminImportedPlaylistApi}
-                    />
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-sm text-text truncate">{row.name}</p>
+                  <div className="flex items-center gap-1 shrink-0">
                     <EnabledToggle
                       playlistId={row.id}
                       enabled={row.enabled}
@@ -1287,9 +1267,31 @@ function AdminImportedPlaylistsSection() {
                     />
                   </div>
                 </div>
-                <p className="text-xs text-muted mt-1 truncate">
-                  Owner: <span className="text-text font-medium">{row.ownerUsername}</span>
-                  {' · '}
+                <div className="flex items-center flex-wrap gap-2 mt-1">
+                  {row.config?.importSource && (
+                    <ImportSourceBadge
+                      source={row.config.importSource}
+                      url={row.config.importPlaylistId}
+                    />
+                  )}
+                  {row.trackCount != null && (
+                    <span
+                      className="text-xs text-muted"
+                      title="Tracks currently matched into this Plex playlist -- may be fewer than the source playlist's total if some songs aren't in your library. See missing tracks below."
+                    >
+                      {`${row.trackCount} in Plex`}
+                    </span>
+                  )}
+                  <GenerateButton
+                    playlistId={row.id}
+                    onGenerated={refetch}
+                    generateFn={generateAdminImportedPlaylistApi}
+                  />
+                </div>
+                <p className="flex items-center flex-wrap gap-x-1 text-xs text-muted mt-1">
+                  <User size={12} aria-label="Owner" className="shrink-0" />
+                  <span className="text-text font-medium">{row.ownerUsername}</span>
+                  <span aria-hidden="true">·</span>
                   {/* Paused imports never refresh on their own; say so rather
                       than leave them looking scheduled. */}
                   {row.enabled ? (
