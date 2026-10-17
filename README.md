@@ -13,7 +13,7 @@ AI-scored album and artist recommendations, mood search, Plex playlists, and one
   <a href="https://github.com/jbuxxy/dj-llama/actions/workflows/ci.yml"><img src="https://github.com/jbuxxy/dj-llama/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/jbuxxy/dj-llama/releases"><img src="https://img.shields.io/github/v/release/jbuxxy/dj-llama?color=0cc75c" alt="Latest release"></a>
   <a href="https://github.com/jbuxxy/dj-llama/pkgs/container/dj-llama"><img src="https://img.shields.io/badge/ghcr.io-jbuxxy%2Fdj--llama-0cc75c?logo=docker&logoColor=white" alt="Docker image"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/jbuxxy/dj-llama?color=0cc75c" alt="MIT license"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-0cc75c" alt="MIT license"></a>
 </p>
 
 <picture>
