@@ -11,7 +11,7 @@ import {
   Send,
   Sparkles,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { type CSSProperties, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useClickOutside } from '../hooks/use-click-outside'
 import {
@@ -187,6 +187,10 @@ export function ActivityCenter() {
   const jobs = useActivity()
   const queryClient = useQueryClient()
   const [open, setOpen] = useState(false)
+  // On phones the button sits mid-header, so a popover anchored to it runs
+  // off the left edge. Below sm it's pinned to the viewport instead, just
+  // under the button.
+  const [mobileTop, setMobileTop] = useState(0)
   const ref = useRef<HTMLDivElement>(null)
   useClickOutside(ref, () => setOpen(false), open)
 
@@ -219,7 +223,10 @@ export function ActivityCenter() {
     <div ref={ref} className="relative">
       <button
         type="button"
-        onClick={() => setOpen((v) => !v)}
+        onClick={(e) => {
+          setMobileTop(e.currentTarget.getBoundingClientRect().bottom + 4)
+          setOpen((v) => !v)
+        }}
         aria-label={title}
         title={title}
         aria-expanded={open}
@@ -256,7 +263,8 @@ export function ActivityCenter() {
         <div
           role="dialog"
           aria-label="Activity"
-          className="absolute right-0 top-full mt-1 w-80 max-w-[calc(100vw-2rem)] bg-surface border border-border rounded-lg shadow-lg z-50"
+          style={{ '--activity-top': `${mobileTop}px` } as CSSProperties}
+          className="fixed inset-x-4 top-(--activity-top) sm:absolute sm:inset-x-auto sm:right-0 sm:top-full sm:mt-1 sm:w-80 bg-surface border border-border rounded-lg shadow-lg z-50"
         >
           <div className="flex items-center justify-between px-3 py-2 border-b border-border">
             <p className="text-sm font-medium text-text">Activity</p>
