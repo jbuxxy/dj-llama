@@ -31,6 +31,8 @@ export type PlaylistItem = {
   artistMbid: string
   trackName?: string
   trackMbid?: string
+  /** Already-known Plex id for the track; the Plex push uses it instead of searching. */
+  ratingKey?: string
 }
 
 export type UnmatchedPlaylistItem = PlaylistItem & {

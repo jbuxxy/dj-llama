@@ -1,3 +1,4 @@
+import PQueue from 'p-queue'
 import { createHttpClient, HttpError } from '@/core/clients/http'
 import type { ServiceTestResult } from '@/core/types'
 import { errMsg } from '@/core/validation'
@@ -56,6 +57,11 @@ type PlexPlaylistItem = {
 type SearchOutcome =
   | { ratingKey: string; reason?: undefined }
   | { ratingKey: null; reason: 'not_found' | 'search_error' }
+
+// Each search is 1-4 /hubs/search calls against the user's own Plex server;
+// a handful in flight cuts a 100-track push from hundreds of sequential
+// round trips without hammering a small home server.
+const SEARCH_CONCURRENCY = 4
 
 // Shared by createPlexPlaylistTarget (full playlist create/replace) and
 // sweepPlaylistLiveTracks (targeted single-item replacement) so both talk to
@@ -363,15 +369,27 @@ export function createPlexPlaylistTarget(
       options?: { description?: string; public?: boolean; replace?: boolean; dryRun?: boolean },
     ): Promise<PlaylistResult> {
       try {
-        // Resolve Plex rating keys for items that have a trackName
+        // Resolve Plex rating keys for items that have a trackName. Tracks
+        // the generator read from this Plex library already carry theirs;
+        // the rest are searched a few at a time, keeping playlist order.
+        const withTitles = items.filter(
+          (item): item is PlaylistItem & { trackName: string } => !!item.trackName,
+        )
+        const searches = new PQueue({ concurrency: SEARCH_CONCURRENCY })
+        const outcomes: SearchOutcome[] = await Promise.all(
+          withTitles.map((item) =>
+            item.ratingKey
+              ? { ratingKey: item.ratingKey }
+              : searches.add(() => searchTrack(item.artistName, item.trackName)),
+          ),
+        )
         const ratingKeys: string[] = []
         const unmatchedItems: UnmatchedPlaylistItem[] = []
-        for (const item of items) {
-          if (!item.trackName) continue
-          const outcome = await searchTrack(item.artistName, item.trackName)
+        withTitles.forEach((item, i) => {
+          const outcome = outcomes[i] as SearchOutcome
           if (outcome.ratingKey) ratingKeys.push(outcome.ratingKey)
           else unmatchedItems.push({ ...item, reason: outcome.reason })
-        }
+        })
 
         // Caller only wants to know what's matched/missing (e.g. an import
         // whose "Push to Plexamp" toggle is off) -- skip touching the actual

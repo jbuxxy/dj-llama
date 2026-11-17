@@ -154,6 +154,64 @@ describe('createPlexPlaylistTarget', () => {
     expect(createUrl).not.toContain('rk-other')
   })
 
+  it('uses a known ratingKey without searching and keeps playlist order', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockImplementation((url: string | URL | Request, init?: RequestInit) => {
+        const value = decodeURIComponent(String(url))
+        if (value.includes('/hubs/search')) {
+          return Promise.resolve(
+            ok({
+              MediaContainer: {
+                Hub: [
+                  {
+                    type: 'track',
+                    Metadata: [
+                      {
+                        ratingKey: 'rk-searched',
+                        title: 'Creep',
+                        grandparentTitle: 'Radiohead',
+                        type: 'track',
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          )
+        }
+        if (value.includes('/playlists?') && init?.method === 'POST') {
+          return Promise.resolve(
+            ok({ MediaContainer: { Metadata: [{ ratingKey: 'playlist-1', title: 'Mix' }] } }),
+          )
+        }
+        if (value.includes('/playlists?')) {
+          return Promise.resolve(ok({ MediaContainer: { Metadata: [] } }))
+        }
+        return Promise.resolve(ok({ MediaContainer: { machineIdentifier: 'machine-1' } }))
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await createPlexPlaylistTarget(4, CONFIG).createPlaylist?.('Mix', [
+      { artistName: 'Muse', artistMbid: '', trackName: 'Uprising', ratingKey: 'rk-known' },
+      { artistName: 'Radiohead', artistMbid: '', trackName: 'Creep' },
+    ])
+
+    expect(result).toMatchObject({ success: true, itemsAdded: 2 })
+    const searches = fetchMock.mock.calls.filter(([url]) => String(url).includes('/hubs/search'))
+    expect(searches.every(([url]) => !decodeURIComponent(String(url)).includes('Uprising'))).toBe(
+      true,
+    )
+    const createUrl = decodeURIComponent(
+      String(
+        fetchMock.mock.calls.find(
+          ([url, init]) => String(url).includes('/playlists?') && init?.method === 'POST',
+        )?.[0],
+      ),
+    )
+    expect(createUrl).toContain('/metadata/rk-known,rk-searched')
+  })
+
   it('matches an unambiguous title-only hit when the source tags a cover-band alias instead of the real artist', async () => {
     const fetchMock = vi
       .fn()

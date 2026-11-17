@@ -5,6 +5,8 @@ export type ResolvedTrack = {
   spotifyUri?: string
   deezerId?: string
   localPath?: string
+  /** Plex's id for a 'local' track, from the same server the playlist is pushed to. */
+  plexRatingKey?: string
   source: 'local' | 'spotify' | 'deezer' | 'musicbrainz'
 }
 
@@ -26,6 +28,7 @@ export type LocalTrack = {
   name: string
   artist: string
   path: string
+  ratingKey?: string
   duration?: number
   userRating?: number
   viewCount?: number

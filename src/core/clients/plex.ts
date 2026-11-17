@@ -104,6 +104,8 @@ export type PlexOwnedTrack = {
   name: string
   artist: string
   path: string
+  /** Plex's id for the track -- lets a playlist push skip searching for it again. */
+  ratingKey?: string
   // Plex's 0-10 personal rating (8+ = 4+ stars, "loved") and this user's
   // own play count -- used to bias track selection toward liked/hit songs.
   userRating?: number
@@ -433,6 +435,7 @@ export function createPlexClient(
     const res = await get<{
       MediaContainer: {
         Metadata?: Array<{
+          ratingKey?: string
           title: string
           grandparentTitle?: string
           Media?: Array<{ Part?: Array<{ file?: string }> }>
@@ -445,6 +448,7 @@ export function createPlexClient(
     const metadata = res.MediaContainer.Metadata ?? []
     return metadata
       .map((m) => ({
+        ratingKey: m.ratingKey,
         name: m.title,
         artist: m.grandparentTitle ?? artistName,
         path: m.Media?.[0]?.Part?.[0]?.file ?? '',
@@ -471,6 +475,7 @@ export function createPlexClient(
     const res = await get<{
       MediaContainer: {
         Metadata?: Array<{
+          ratingKey?: string
           title: string
           grandparentTitle?: string
           originalTitle?: string
@@ -484,6 +489,7 @@ export function createPlexClient(
 
     return (res.MediaContainer.Metadata ?? [])
       .map((m) => ({
+        ratingKey: m.ratingKey,
         name: m.title,
         artist: m.originalTitle || m.grandparentTitle || '',
         path: m.Media?.[0]?.Part?.[0]?.file ?? '',

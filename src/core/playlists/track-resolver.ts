@@ -91,6 +91,7 @@ async function resolveFromLocal(
       artistName,
       trackName: t.name,
       localPath: t.path,
+      plexRatingKey: t.ratingKey,
       source: 'local' as const,
     }))
   } catch (error: unknown) {

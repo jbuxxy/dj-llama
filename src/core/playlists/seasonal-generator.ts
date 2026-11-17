@@ -27,6 +27,7 @@ export type SeasonalCandidate = {
   artistName: string
   trackName: string
   localPath: string
+  plexRatingKey?: string
   reason: SeasonalReason
   score: number
 }
@@ -167,6 +168,7 @@ export async function generateSeasonalTracks(
       artistName: track.artist,
       trackName: track.name,
       localPath: track.path,
+      plexRatingKey: track.ratingKey,
       reason,
       score,
     })
@@ -308,6 +310,7 @@ export async function generateSeasonalTracks(
       artistName: c.artistName,
       trackName: c.trackName,
       localPath: c.localPath || undefined,
+      plexRatingKey: c.plexRatingKey,
       source: 'local' as const,
     })),
     candidates: leftovers,

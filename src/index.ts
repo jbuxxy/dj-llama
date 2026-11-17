@@ -1717,6 +1717,7 @@ async function pushPlaylistTracksToPlex(
     artistMbid: '',
     trackName: track.trackName ?? undefined,
     trackMbid: track.mbid ?? undefined,
+    ratingKey: track.plexRatingKey,
   }))
   const target = createPlexPlaylistTarget(playlist.userId, {
     url: ownerConns.plexUrl,
