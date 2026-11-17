@@ -654,7 +654,7 @@ describe('PATCH /api/v1/recommendations/:id', () => {
     })
 
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Unknown targetId: missing-target' })
+    await expect(res.json()).resolves.toMatchObject({ title: 'Unknown targetId: missing-target' })
   })
 })
 
@@ -761,7 +761,7 @@ describe('POST /api/v1/recommendations/bulk', () => {
     })
 
     expect(res.status).toBe(400)
-    await expect(res.json()).resolves.toEqual({ error: 'Unknown targetId: missing-target' })
+    await expect(res.json()).resolves.toMatchObject({ title: 'Unknown targetId: missing-target' })
   })
 })
 

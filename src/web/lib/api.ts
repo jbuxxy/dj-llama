@@ -40,21 +40,24 @@ export class ApiError extends Error {
   }
 }
 
+// Every server error is problem+json (server/helpers/problem.ts): `title`
+// is the message, `detail` (when present) the more specific explanation.
 function extractApiErrorMessage(status: number, data: unknown): string {
   if (data && typeof data === 'object') {
-    const record = data as Record<string, unknown>
-    if (typeof record.title === 'string' && record.title.trim()) {
-      return record.title
-    }
-    if (typeof record.error === 'string' && record.error.trim()) {
-      return record.error
-    }
-    if (typeof record.message === 'string' && record.message.trim()) {
-      return record.message
-    }
+    const { detail, title } = data as { detail?: unknown; title?: unknown }
+    for (const v of [detail, title]) if (typeof v === 'string' && v.trim()) return v.trim()
   }
-
   return `API Error ${status}`
+}
+
+/** Turns a failed response into an ApiError, signalling the sign-in screen on a 401. */
+async function apiErrorFrom(res: Response): Promise<ApiError> {
+  if (res.status === 401) {
+    clearStoredToken()
+    window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+    return new ApiError(res.status, { title: 'Session expired' })
+  }
+  return new ApiError(res.status, await res.json().catch(() => ({ title: res.statusText })))
 }
 
 // Fired when any fetchApi call gets 401 - AuthGate listens and shows login
@@ -88,15 +91,7 @@ async function fetchApi<T>(path: string, options?: RequestInit): Promise<T> {
     credentials: 'same-origin',
     headers: getBrowserHeaders(options),
   })
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearStoredToken()
-      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
-      throw new ApiError(res.status, { error: 'Session expired' })
-    }
-    const error = await res.json().catch(() => ({ error: res.statusText }))
-    throw new ApiError(res.status, error)
-  }
+  if (!res.ok) throw await apiErrorFrom(res)
   if (res.status === 204) {
     return undefined as T
   }
@@ -720,7 +715,7 @@ export async function exportRecommendations(
   if (params?.batchId) query.set('batchId', String(params.batchId))
   const qs = query.toString() ? `?${query}` : ''
   const response = await authedRawFetch(`/exports/${format}${qs}`)
-  if (!response.ok) throw new Error('Export failed')
+  if (!response.ok) throw await apiErrorFrom(response)
   await downloadResponseBlob(
     response,
     `djllama-export-${new Date().toISOString().slice(0, 10)}.${format}`,
@@ -946,15 +941,7 @@ export async function moodDiscoverStream(
     headers: { Accept: 'application/x-ndjson' },
     signal,
   })
-  if (!res.ok) {
-    if (res.status === 401) {
-      clearStoredToken()
-      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
-      throw new ApiError(res.status, { error: 'Session expired' })
-    }
-    const error = await res.json().catch(() => ({ error: res.statusText }))
-    throw new ApiError(res.status, error)
-  }
+  if (!res.ok) throw await apiErrorFrom(res)
   // Not streamed (older server, or a proxy that rewrote it): one JSON body.
   if (!(res.headers.get('content-type') ?? '').includes('ndjson') || !res.body) {
     const data = (await res.json()) as { results: MoodResult[] }
@@ -1266,7 +1253,7 @@ export async function exportPlaylistApi(
   format: 'json' | 'csv' | 'm3u' | 'xspf',
 ): Promise<void> {
   const response = await authedRawFetch(`/playlists/${id}/export/${format}`)
-  if (!response.ok) throw new Error('Playlist export failed')
+  if (!response.ok) throw await apiErrorFrom(response)
   await downloadResponseBlob(response, `playlist-${id}.${format}`)
 }
 
@@ -1293,7 +1280,7 @@ export const getAlbumPreview = (artistId: number, albumTitle: string) =>
 export async function downloadBackup(includeCaches = false): Promise<void> {
   const qs = includeCaches ? '?includeCaches=true' : ''
   const res = await authedRawFetch(`/admin/backup${qs}`, { method: 'POST' })
-  if (!res.ok) throw new ApiError(res.status, await res.json().catch(() => ({})))
+  if (!res.ok) throw await apiErrorFrom(res)
   await downloadResponseBlob(res, 'djllama-backup.json')
 }
 

@@ -43,3 +43,41 @@ export function problem(
 export function notFoundProblem(c: Context, type: string, title: string, code: string) {
   return problem(c, type, title, 404, undefined, undefined, code)
 }
+
+const STATUS_SLUGS: Record<number, string> = {
+  400: 'bad-request',
+  401: 'not-authenticated',
+  403: 'forbidden',
+  404: 'not-found',
+  409: 'conflict',
+  413: 'payload-too-large',
+  415: 'unsupported-media-type',
+  422: 'unprocessable',
+  429: 'rate-limited',
+  500: 'internal-error',
+  502: 'upstream-error',
+  503: 'unavailable',
+  504: 'upstream-timeout',
+}
+
+/**
+ * The everyday error response: a problem+json body whose `title` is the
+ * message to show. `extensions` carries any extra fields a client branches
+ * on (`code`, `fields`, ...). Use `problem()` directly when a stable `type`
+ * slug or a separate `detail` matters.
+ */
+export function apiError(
+  c: Context,
+  status: number,
+  message: string,
+  extensions?: Record<string, unknown>,
+) {
+  return problem(
+    c,
+    STATUS_SLUGS[status] ?? `http-${status}`,
+    message,
+    status,
+    undefined,
+    extensions,
+  )
+}

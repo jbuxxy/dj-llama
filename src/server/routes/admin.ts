@@ -10,7 +10,7 @@ import { logAndSanitize } from '@/core/validation'
 import { resolveDbBackend } from '@/db/backend'
 import { assertSafePglitePath, classifyTargetError, connectTarget } from '@/db/connect'
 import type { Preferences } from '@/db/schema'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import { setMaintenance } from '@/server/maintenance'
 import { backupFileSchema } from '@/server/schemas/admin'
 import { migrateRequestSchema, migrateTargetSchema } from '@/server/schemas/migrate'
@@ -62,12 +62,11 @@ export function adminRoutes(deps: AdminDeps) {
     const force = c.req.query('force') === 'true'
     const confirm = c.req.query('confirm') === 'true'
     if (!confirm) {
-      return c.json(
-        {
-          error: 'Restore overwrites existing data. Re-submit with ?confirm=true to acknowledge.',
-          code: 'confirmation_required' as const,
-        },
+      return apiError(
+        c,
         400,
+        'Restore overwrites existing data. Re-submit with ?confirm=true to acknowledge.',
+        { code: 'confirmation_required' as const },
       )
     }
     const contentType = c.req.header('content-type') ?? ''
@@ -78,7 +77,7 @@ export function adminRoutes(deps: AdminDeps) {
         const form = await c.req.formData()
         const file = form.get('file')
         if (!file || !(file instanceof File)) {
-          return c.json({ error: 'No file provided' }, 400)
+          return apiError(c, 400, 'No file provided')
         }
         const text = await file.text()
         raw = JSON.parse(text)
@@ -86,16 +85,18 @@ export function adminRoutes(deps: AdminDeps) {
         raw = await c.req.json()
       }
     } catch {
-      return c.json({ error: 'Invalid backup file format' }, 400)
+      return apiError(c, 400, 'Invalid backup file format')
     }
 
     const parsed = backupFileSchema.safeParse(raw)
     if (!parsed.success) {
       const first = parsed.error.issues[0]
       const where = first?.path.length ? first.path.join('.') : 'root'
-      return c.json(
+      return apiError(
+        c,
+        400,
+        `Invalid backup file structure at ${where}: ${first?.message ?? 'unknown'}`,
         {
-          error: `Invalid backup file structure at ${where}: ${first?.message ?? 'unknown'}`,
           code: 'validation_failed' as const,
           details: parsed.error.issues.map((i) => ({
             path: i.path,
@@ -103,7 +104,6 @@ export function adminRoutes(deps: AdminDeps) {
             message: i.message,
           })),
         },
-        400,
       )
     }
     const backup: BackupFile = parsed.data as BackupFile
@@ -113,18 +113,14 @@ export function adminRoutes(deps: AdminDeps) {
       result = await restoreBackup(deps.db, backup, { force })
     } catch (err) {
       const message = logAndSanitize(err, 'admin-restore')
-      return c.json({ error: `Restore failed (rolled back): ${message}` }, 500)
+      return apiError(c, 500, `Restore failed (rolled back): ${message}`)
     }
 
     if (result.encryptionMismatch && !force) {
-      return c.json(
-        {
-          error: 'Encryption key mismatch',
-          affectedFields: result.affectedEncryptedFields,
-          hint: 'Add ?force=true to restore anyway. Encrypted fields will need re-entry.',
-        },
-        409,
-      )
+      return apiError(c, 409, 'Encryption key mismatch', {
+        affectedFields: result.affectedEncryptedFields,
+        hint: 'Add ?force=true to restore anyway. Encrypted fields will need re-entry.',
+      })
     }
 
     return c.json(result)
@@ -161,8 +157,7 @@ export function adminRoutes(deps: AdminDeps) {
   // without creating the database file.
   router.post('/api/v1/admin/migrate-backend/test', async (c) => {
     const parsed = migrateTargetSchema.safeParse(await c.req.json().catch(() => null))
-    if (!parsed.success)
-      return c.json({ error: 'Invalid target', details: parsed.error.issues }, 400)
+    if (!parsed.success) return apiError(c, 400, 'Invalid target', { details: parsed.error.issues })
     try {
       if (parsed.data.backend === 'pglite') {
         const abs = assertSafePglitePath(parsed.data.path)
@@ -176,10 +171,10 @@ export function adminRoutes(deps: AdminDeps) {
         await conn.close()
       }
     } catch (err) {
-      return c.json(
-        { ok: false, code: classifyTargetError(err), error: logAndSanitize(err, 'migrate-test') },
-        502,
-      )
+      return apiError(c, 502, logAndSanitize(err, 'migrate-test'), {
+        ok: false,
+        code: classifyTargetError(err),
+      })
     }
   })
 

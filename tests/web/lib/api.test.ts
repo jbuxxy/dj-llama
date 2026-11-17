@@ -248,15 +248,16 @@ describe('authenticated downloads', () => {
     expect(clickedAnchor?.download).toBe('server-backup.json')
   })
 
-  it('preserves each download function error shape', async () => {
+  it('surfaces the server message from every download function', async () => {
+    const failure = (status: number, title: string) => ({
+      ok: false,
+      status,
+      json: vi.fn().mockResolvedValue({ title }),
+    })
     fetchMock
-      .mockResolvedValueOnce({ ok: false, status: 500 })
-      .mockResolvedValueOnce({ ok: false, status: 503 })
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 422,
-        json: vi.fn().mockResolvedValue({ title: 'Backup failed' }),
-      })
+      .mockResolvedValueOnce(failure(500, 'Export failed'))
+      .mockResolvedValueOnce(failure(503, 'Playlist export failed'))
+      .mockResolvedValueOnce(failure(422, 'Backup failed'))
 
     await expect(exportRecommendations('json')).rejects.toThrow('Export failed')
     await expect(exportPlaylistApi(7, 'json')).rejects.toThrow('Playlist export failed')

@@ -77,10 +77,9 @@ const SPOTIFY_BRIDGE_CSP = [
 export function createApp(deps: AppDependencies) {
   const app = new Hono<HonoEnv>()
 
-  // Central error handler: maps HTTPException (including zJson's hook failures
-  // when a handler throws one) and unknown errors to RFC 9457 problem+json.
-  // Zod/validator hooks still return their {error, code, details} shape
-  // directly so existing clients keep working; only unhandled throws flow here.
+  // Central error handler: maps HTTPException and unknown throws to RFC 9457
+  // problem+json -- the same shape every route returns through problem() /
+  // apiError() (see helpers/problem.ts).
   app.onError((err, c) => {
     if (err instanceof HTTPException) {
       const res = err.getResponse()

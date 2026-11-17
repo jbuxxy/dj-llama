@@ -5,6 +5,7 @@ import type { AppDependencies } from '@/server'
 import { adminRequired } from '@/server/helpers/auth-problems'
 import { readPagination } from '@/server/helpers/pagination'
 import { encodeCursor } from '@/server/helpers/pagination-cursor'
+import { apiError } from '@/server/helpers/problem'
 import { requireAdmin as requireAdminShared } from '@/server/helpers/require-user'
 import { updateUserSchema, userIdParamSchema } from '@/server/schemas/users'
 import { zJson, zParam } from '@/server/schemas/validator'
@@ -89,23 +90,23 @@ export function userRoutes(deps: AppDependencies) {
       const body = c.req.valid('json')
 
       const target = await deps.getUserById(targetId)
-      if (!target) return c.json({ error: 'User not found' }, 404)
+      if (!target) return apiError(c, 404, 'User not found')
 
       // Guard: the Plex server owner is permanently admin -- nobody, not
       // even another admin, can demote them. Distinct from the self/last-
       // admin guards below, which are about ordinary admins.
       if (body.isAdmin === false && target.isOwner) {
-        return c.json({ error: 'The server owner cannot be removed as admin' }, 400)
+        return apiError(c, 400, 'The server owner cannot be removed as admin')
       }
 
       // Guard: admin cannot remove their own admin role
       if (body.isAdmin === false && caller.id === targetId) {
-        return c.json({ error: 'Cannot remove your own admin role' }, 400)
+        return apiError(c, 400, 'Cannot remove your own admin role')
       }
 
       // Guard: can't remove admin from last admin user
       if (body.isAdmin === false && target.isAdmin && (await isLastAdmin(targetId))) {
-        return c.json({ error: 'Cannot remove admin from the last admin user' }, 400)
+        return apiError(c, 400, 'Cannot remove admin from the last admin user')
       }
 
       await deps.updateUser(targetId, {
@@ -127,20 +128,20 @@ export function userRoutes(deps: AppDependencies) {
     const { id: targetId } = c.req.valid('param')
 
     if (caller.id === targetId) {
-      return c.json({ error: 'Cannot delete your own account' }, 400)
+      return apiError(c, 400, 'Cannot delete your own account')
     }
 
     const target = await deps.getUserById(targetId)
-    if (!target) return c.json({ error: 'User not found' }, 404)
+    if (!target) return apiError(c, 404, 'User not found')
 
     // Guard: the Plex server owner can never be deleted.
     if (target.isOwner) {
-      return c.json({ error: 'The server owner cannot be deleted' }, 400)
+      return apiError(c, 400, 'The server owner cannot be deleted')
     }
 
     // Guard: can't delete the last admin
     if (target.isAdmin && (await isLastAdmin(targetId))) {
-      return c.json({ error: 'Cannot delete the last admin user' }, 400)
+      return apiError(c, 400, 'Cannot delete the last admin user')
     }
 
     await deps.deleteUser(targetId)

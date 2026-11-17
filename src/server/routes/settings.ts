@@ -29,7 +29,7 @@ import { disableSystemTarget, upsertSystemTarget } from '@/db/queries/targets'
 import { getUserConnections, updateUserConnections } from '@/db/queries/users'
 import { mergePreferences, type Preferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import { adminGuard, resolveAdmin } from '@/server/middleware/admin-guard'
 import { browserCookieSecure } from '@/server/middleware/session-cookie'
 import { notificationChannel, updateSettingsSchema } from '@/server/schemas/settings'
@@ -263,7 +263,7 @@ export function settingsRoutes(deps: AppDependencies) {
     const isAdmin = await resolveAdmin(userId, deps.getUserById, c.get('legacyTokenAuth'))
     const response = await buildSettingsResponse(deps, userId, isAdmin)
     if (!response) {
-      return c.json({ error: 'Settings not found' }, 404)
+      return apiError(c, 404, 'Settings not found')
     }
     return c.json(maskSecrets(response))
   })
@@ -599,7 +599,7 @@ export function settingsRoutes(deps: AppDependencies) {
     }
 
     if (!isAdmin && Object.keys(globalFields).length > 0) {
-      return c.json({ error: 'Admin access required to modify global settings' }, 403)
+      return apiError(c, 403, 'Admin access required to modify global settings')
     }
 
     if (typeof globalFields.aiBaseUrl === 'string' && globalFields.aiBaseUrl.length > 0) {
@@ -700,7 +700,7 @@ export function settingsRoutes(deps: AppDependencies) {
 
     const response = await buildSettingsResponse(deps, userId, isAdmin)
     if (!response) {
-      return c.json({ error: 'Settings not found' }, 404)
+      return apiError(c, 404, 'Settings not found')
     }
     return c.json(maskSecrets(response))
   })

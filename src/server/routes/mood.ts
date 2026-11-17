@@ -9,6 +9,7 @@ import type { AiRecommendation, TasteProfile } from '@/core/types'
 import { errMsg } from '@/core/validation'
 import type { Database } from '@/db'
 import { getLidarrAlbumTitlesByArtist } from '@/db/queries/lidarr-cache'
+import { apiError } from '@/server/helpers/problem'
 import { moodDiscoverSchema } from '@/server/schemas/mood'
 import { zJson } from '@/server/schemas/validator'
 import type { HonoEnv } from '@/server/types'
@@ -165,17 +166,17 @@ export function moodRoutes(deps: MoodDeps) {
     const trimmedQuery = query.trim()
 
     if (!trimmedQuery) {
-      return c.json({ error: 'query is required' }, 400)
+      return apiError(c, 400, 'query is required')
     }
 
     const settings = await deps.getSettings()
     if (!settings) {
-      return c.json({ error: 'Settings not configured' }, 400)
+      return apiError(c, 400, 'Settings not configured')
     }
 
     const { aiProvider, aiModel, aiApiKey, aiBaseUrl } = settings as Record<string, string | null>
     if (!aiProvider || !aiModel) {
-      return c.json({ error: 'AI provider not configured' }, 400)
+      return apiError(c, 400, 'AI provider not configured')
     }
 
     const provider = await deps.providerRegistry.create(aiProvider, {
@@ -246,7 +247,7 @@ export function moodRoutes(deps: MoodDeps) {
       recs = await provider.getRecommendations(profile)
     } catch (err) {
       console.error(`[mood] ${aiProvider} request failed:`, errMsg(err))
-      return c.json({ error: failureMessage(err) }, 502)
+      return apiError(c, 502, failureMessage(err))
     }
 
     const results: EnrichedResult[] = await Promise.all(

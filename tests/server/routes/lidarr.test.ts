@@ -155,7 +155,7 @@ describe('Lidarr onError sanitization', () => {
     const res = await app.request('/api/v1/lidarr/stats')
     expect(res.status).toBe(500)
     const body = await res.json()
-    expect(body.error).toBe('An unexpected error occurred')
+    expect(body.title).toBe('An unexpected error occurred')
     expect(JSON.stringify(body)).not.toContain('10.0.0.5')
     expect(JSON.stringify(body)).not.toContain('8686')
   })

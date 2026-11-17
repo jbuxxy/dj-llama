@@ -18,7 +18,7 @@ import { mergePreferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
 import { buildPipelineRun } from '@/server/helpers/pipeline-run'
 import { resolveUserPreferences } from '@/server/helpers/preferences'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import { adminGuard } from '@/server/middleware/admin-guard'
 import { quickDiscoverSchema } from '@/server/schemas/pipeline'
 import { zJson } from '@/server/schemas/validator'
@@ -38,7 +38,7 @@ export function pipelineRoutes(deps: AppDependencies) {
   router.post('/api/v1/pipeline/run', async (c) => {
     const settings = await deps.getSettings()
     if (!settings) {
-      return c.json({ error: 'Settings not found' }, 400)
+      return apiError(c, 400, 'Settings not found')
     }
     if (!settings.aiProvider || !settings.aiModel) {
       return problem(
@@ -53,7 +53,7 @@ export function pipelineRoutes(deps: AppDependencies) {
     }
 
     const run = await buildPipelineRun(deps, c.get('userId'), 'manual')
-    if (!run) return c.json({ error: 'Settings not found' }, 400)
+    if (!run) return apiError(c, 400, 'Settings not found')
     // Start now, or queue behind the in-flight run (single-flight preserved).
     const enqueued = deps.orchestrator.enqueue(run)
 
@@ -118,7 +118,7 @@ export function pipelineRoutes(deps: AppDependencies) {
 
     const settings = await deps.getSettings()
     if (!settings) {
-      return c.json({ error: 'Settings not found' }, 400)
+      return apiError(c, 400, 'Settings not found')
     }
 
     const quickDiscoverUserId = c.get('userId')
@@ -383,7 +383,7 @@ export function pipelineRoutes(deps: AppDependencies) {
     try {
       const settings = await deps.getSettings()
       if (!settings) {
-        return c.json({ error: 'Settings not found' }, 400)
+        return apiError(c, 400, 'Settings not found')
       }
 
       const userId = c.get('userId')
@@ -402,7 +402,7 @@ export function pipelineRoutes(deps: AppDependencies) {
       })
 
       if (!audiodb && !lidarr && !fanart && !musicinfo) {
-        return c.json({ error: 'No artist image sources configured' }, 400)
+        return apiError(c, 400, 'No artist image sources configured')
       }
       const hasUserScopedImageSources = Boolean(fanart || musicinfo)
 

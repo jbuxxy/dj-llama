@@ -1,5 +1,6 @@
 import { zValidator as zv } from '@hono/zod-validator'
 import * as z from 'zod'
+import { apiError } from '@/server/helpers/problem'
 
 export const idParamSchema = z.object({
   id: z.coerce.number().int().positive(),
@@ -42,7 +43,7 @@ const hook = (result: AnyResult, c: any) => {
       ? `${first.path.join('.')}: ${first.message}`
       : first.message
     : 'Invalid request'
-  return c.json({ error: summary, code: 'validation_failed' as const, details: issues }, 400)
+  return apiError(c, 400, summary, { code: 'validation_failed' as const, details: issues })
 }
 
 export const zJson = <T extends z.ZodTypeAny>(schema: T) => zv('json', schema, hook)

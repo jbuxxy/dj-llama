@@ -5,6 +5,7 @@ import { getArtistsByGenre, getGenreEnrichments } from '@/db/queries/artists'
 import { getGenreArtists } from '@/db/queries/recommendations'
 import type { AppDependencies } from '@/server'
 import { parseIntClamp } from '@/server/helpers/parse-int-clamp'
+import { apiError } from '@/server/helpers/problem'
 import { adminGuard } from '@/server/middleware/admin-guard'
 import type { HonoEnv } from '@/server/types'
 
@@ -32,7 +33,7 @@ export function genreRoutes(deps: AppDependencies) {
   router.get('/api/v1/genres/search', async (c) => {
     const q = c.req.query('q') ?? ''
     if (q.length < 2) {
-      return c.json({ error: 'Query must be at least 2 characters' }, 400)
+      return apiError(c, 400, 'Query must be at least 2 characters')
     }
     const results = await deps.genreService.search(q)
     return c.json(results)
@@ -42,7 +43,7 @@ export function genreRoutes(deps: AppDependencies) {
     const slug = c.req.param('slug')
     const genre = await deps.genreService.getOrFetchGenre(slug)
     if (!genre) {
-      return c.json({ error: 'Genre not found' }, 404)
+      return apiError(c, 404, 'Genre not found')
     }
     const [subGenres, libraryArtists] = await Promise.all([
       deps.genreService.getSubGenres(genre.id),
@@ -64,12 +65,12 @@ export function genreRoutes(deps: AppDependencies) {
 
     const VALID_VIEWS = new Set(['recommended', 'trending', 'deep_cuts'])
     if (!VALID_VIEWS.has(view)) {
-      return c.json({ error: 'Invalid view. Use recommended, trending, or deep_cuts.' }, 400)
+      return apiError(c, 400, 'Invalid view. Use recommended, trending, or deep_cuts.')
     }
 
     const genre = await deps.genreService.getOrFetchGenre(slug)
     if (!genre) {
-      return c.json({ error: 'Genre not found' }, 404)
+      return apiError(c, 404, 'Genre not found')
     }
 
     const artists = await getGenreArtists(deps.db, genre.name, view, limit, userId)
@@ -79,7 +80,7 @@ export function genreRoutes(deps: AppDependencies) {
   router.post('/api/v1/genres/seed', adminGuard(deps.getUserById), async (c) => {
     const settings = await deps.getSettings()
     if (!settings?.lidarrUrl || !settings?.lidarrApiKey) {
-      return c.json({ error: 'Lidarr not configured' }, 400)
+      return apiError(c, 400, 'Lidarr not configured')
     }
 
     const lidarr = createLidarrClient(

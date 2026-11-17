@@ -10,11 +10,7 @@ type PendingRestore =
   | { file: File; step: 'keyMismatch'; fields: string[] }
 
 function errorText(err: unknown): string {
-  if (err instanceof ApiError) {
-    const msg = (err.data as { error?: unknown } | null)?.error
-    if (typeof msg === 'string' && msg) return msg
-  }
-  return 'Restore failed'
+  return err instanceof ApiError ? err.message : 'Restore failed'
 }
 
 function restoredSummary(tables: Record<string, number>): string {

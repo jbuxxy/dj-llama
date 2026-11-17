@@ -14,7 +14,7 @@ import { getLookupHostname, isHttpUrl, isPrivateIp, isPrivateUrl } from '@/core/
 import { updateUserPreferences } from '@/db/queries/users'
 import { mergePreferences, type Preferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import { requireSessionUser } from '@/server/helpers/require-user'
 import {
   clearSessionCookie,
@@ -60,7 +60,7 @@ export function authRoutes(deps: AppDependencies) {
   // see routes/auth-plex.ts. Kept as a stub (rather than removing the route)
   // so a stray POST here fails loudly instead of 404ing in a confusing way.
   router.post('/api/v1/auth/register', zJson(registerSchema), async (c) => {
-    return c.json({ error: 'Local registration is disabled. Sign in with Plex instead.' }, 403)
+    return apiError(c, 403, 'Local registration is disabled. Sign in with Plex instead.')
   })
 
   // No local password login, same as /register above. Every
@@ -68,7 +68,7 @@ export function authRoutes(deps: AppDependencies) {
   // so this was already unusable in practice -- stubbed explicitly anyway
   // for the same "fail loudly, not confusingly" reason as /register.
   router.post('/api/v1/auth/login', async (c) => {
-    return c.json({ error: 'Local login is disabled. Sign in with Plex instead.' }, 403)
+    return apiError(c, 403, 'Local login is disabled. Sign in with Plex instead.')
   })
 
   router.post('/api/v1/auth/session/migrate', async (c) => {
@@ -142,7 +142,7 @@ export function authRoutes(deps: AppDependencies) {
     }
     const user = await deps.getUserById(userId)
     if (!user) {
-      return c.json({ error: 'User not found' }, 404)
+      return apiError(c, 404, 'User not found')
     }
     return c.json(user)
   })
@@ -166,7 +166,7 @@ export function authRoutes(deps: AppDependencies) {
   // No local passwords exist to change, same reasoning as
   // /register and /login above.
   router.post('/api/v1/auth/change-password', zJson(changePasswordSchema), async (c) => {
-    return c.json({ error: 'Local login is disabled. Sign in with Plex instead.' }, 403)
+    return apiError(c, 403, 'Local login is disabled. Sign in with Plex instead.')
   })
 
   // Get the authenticated user's merged preferences
@@ -183,7 +183,7 @@ export function authRoutes(deps: AppDependencies) {
         'errors.auth.notAuthenticated',
       )
     const user = await deps.getUserById(userId)
-    if (!user) return c.json({ error: 'User not found' }, 404)
+    if (!user) return apiError(c, 404, 'User not found')
     const merged = mergePreferences(user.preferences)
     // Sensitive fields are stored encrypted; mask them directly rather than
     // decrypting, since the response never needs the real value.
@@ -209,7 +209,7 @@ export function authRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
     const body = c.req.valid('json')
     const user = await deps.getUserById(auth.userId)
-    if (!user) return c.json({ error: 'User not found' }, 404)
+    if (!user) return apiError(c, 404, 'User not found')
     // Filter to allowed preference keys only
     const filtered: Record<string, unknown> = {}
     for (const [key, value] of Object.entries(body)) {
@@ -222,19 +222,19 @@ export function authRoutes(deps: AppDependencies) {
     const fallbackUrl = filtered.metadataFallbackUrl
     if (typeof fallbackUrl === 'string' && fallbackUrl) {
       if (!isHttpUrl(fallbackUrl)) {
-        return c.json({ error: 'Metadata fallback URL must use http:// or https://' }, 400)
+        return apiError(c, 400, 'Metadata fallback URL must use http:// or https://')
       }
       if (isPrivateUrl(fallbackUrl)) {
-        return c.json({ error: 'Metadata fallback URL must not point to a private address' }, 400)
+        return apiError(c, 400, 'Metadata fallback URL must not point to a private address')
       }
       try {
         const hostname = getLookupHostname(fallbackUrl)
         const { address } = await lookup(hostname)
         if (isPrivateIp(address)) {
-          return c.json({ error: 'Metadata fallback URL resolves to a private/internal IP' }, 400)
+          return apiError(c, 400, 'Metadata fallback URL resolves to a private/internal IP')
         }
       } catch {
-        return c.json({ error: 'Could not resolve metadata fallback URL hostname' }, 400)
+        return apiError(c, 400, 'Could not resolve metadata fallback URL hostname')
       }
     }
 

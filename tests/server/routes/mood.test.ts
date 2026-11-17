@@ -117,9 +117,9 @@ describe('POST /api/v1/mood/discover', () => {
     })
 
     expect(res.status).toBe(502)
-    const body = (await res.json()) as { error: string }
-    expect(body.error).toContain('openai/gpt-4o-mini')
-    expect(body.error).toContain('client error 404')
+    const body = (await res.json()) as { title: string }
+    expect(body.title).toContain('openai/gpt-4o-mini')
+    expect(body.title).toContain('client error 404')
   })
 
   it('marks an already-owned suggestion instead of dropping it from the results', async () => {

@@ -56,7 +56,7 @@ describe('validation: shared error shape', () => {
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.code).toBe('validation_failed')
-    expect(typeof body.error).toBe('string')
+    expect(typeof body.title).toBe('string')
     expect(Array.isArray(body.details)).toBe(true)
     expect(body.details.length).toBeGreaterThan(0)
     expect(body.details[0]).toHaveProperty('path')

@@ -301,7 +301,7 @@ describe('PATCH /api/v1/users/:id', () => {
 
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/own admin role/i)
+    expect(body.title).toMatch(/own admin role/i)
   })
 
   it('returns 404 for non-existent user', async () => {
@@ -362,7 +362,7 @@ describe('DELETE /api/v1/users/:id', () => {
 
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/own account/i)
+    expect(body.title).toMatch(/own account/i)
   })
 
   it('returns 404 for non-existent user', async () => {

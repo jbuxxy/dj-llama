@@ -8,6 +8,7 @@ import type {
   ListRecommendationsFilters,
   ListRecommendationsResult,
 } from '@/db/queries/recommendations'
+import { apiError } from '@/server/helpers/problem'
 import type { HonoEnv } from '@/server/types'
 
 type ExportDeps = {
@@ -43,7 +44,7 @@ export function exportRoutes(deps: ExportDeps) {
   router.get('/api/v1/exports/:format', async (c) => {
     const format = c.req.param('format')
     if (!CONTENT_TYPES[format] || !EXPORTERS[format]) {
-      return c.json({ error: `Unsupported format: ${format}. Use json, csv, m3u, or xspf` }, 400)
+      return apiError(c, 400, `Unsupported format: ${format}. Use json, csv, m3u, or xspf`)
     }
 
     const userId = c.get('userId')
@@ -52,7 +53,7 @@ export function exportRoutes(deps: ExportDeps) {
     try {
       batchId = parseOptionalInteger(query.batchId, 'batchId')
     } catch (err) {
-      return c.json({ error: (err as Error).message }, 400)
+      return apiError(c, 400, (err as Error).message)
     }
     const filters: ListRecommendationsFilters = {
       userId,

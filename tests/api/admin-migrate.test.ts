@@ -61,7 +61,7 @@ describe('POST /api/v1/admin/migrate-backend/test', () => {
     })
     expect(res.status).toBe(400)
     const body = (await res.json()) as Record<string, unknown>
-    expect(body.error).toBeTruthy()
+    expect(body.title).toBeTruthy()
   })
 
   it('returns 400 for invalid backend value', async () => {
@@ -108,7 +108,7 @@ describe('POST /api/v1/admin/migrate-backend/test', () => {
     expect(res.status).toBe(502)
     const body = (await res.json()) as Record<string, unknown>
     expect(body.ok).toBe(false)
-    expect(typeof body.error).toBe('string')
+    expect(typeof body.title).toBe('string')
   })
 })
 

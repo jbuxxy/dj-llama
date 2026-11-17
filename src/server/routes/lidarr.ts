@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { createLidarrClient } from '@/core/clients/lidarr'
 import { logAndSanitize } from '@/core/validation'
 import type { AppDependencies } from '@/server'
+import { apiError } from '@/server/helpers/problem'
 import { adminGuard } from '@/server/middleware/admin-guard'
 import { lidarrAddSchema } from '@/server/schemas/lidarr'
 import { zJson } from '@/server/schemas/validator'
@@ -22,7 +23,7 @@ export function lidarrRoutes(deps: AppDependencies) {
     )
   }
 
-  router.onError((err, c) => c.json({ error: logAndSanitize(err, 'lidarr-route') }, 500))
+  router.onError((err, c) => apiError(c, 500, logAndSanitize(err, 'lidarr-route')))
 
   router.get('/api/v1/lidarr/stats', adminGuard(deps.getUserById), async (c) => {
     const client = await getClient()

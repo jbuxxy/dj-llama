@@ -5,6 +5,7 @@ import { recognizeSong } from '@/core/clients/shazam'
 import { normalizeArtistName } from '@/core/library/normalize'
 import { pickBestReleaseGroup } from '@/core/pipeline/resolve'
 import type { AppDependencies } from '@/server'
+import { apiError } from '@/server/helpers/problem'
 import { requireUser } from '@/server/helpers/require-user'
 import { findAlreadyOwnedAlbums, getLidarrClient, resolveImageUrl } from '@/server/routes/requests'
 import type { HonoEnv } from '@/server/types'
@@ -43,16 +44,16 @@ export function identifyRoutes(deps: AppDependencies) {
 
     const contentType = c.req.header('content-type') ?? ''
     if (!contentType.includes('multipart/form-data')) {
-      return c.json({ error: 'Expected multipart/form-data upload' }, 400)
+      return apiError(c, 400, 'Expected multipart/form-data upload')
     }
 
     const form = await c.req.formData().catch(() => null)
     const file = form?.get('file')
     if (!file || !(file instanceof File)) {
-      return c.json({ error: 'No audio file provided' }, 400)
+      return apiError(c, 400, 'No audio file provided')
     }
     if (file.size === 0 || file.size > MAX_AUDIO_BYTES) {
-      return c.json({ error: 'Audio clip is empty or too large' }, 400)
+      return apiError(c, 400, 'Audio clip is empty or too large')
     }
 
     const bytes = new Uint8Array(await file.arrayBuffer())

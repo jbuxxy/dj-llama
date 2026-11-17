@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { JobRunRow, JobType } from '@/core/jobs/types'
 import type { HealthSummary } from '@/db/queries/jobs'
 import type { AppDependencies } from '@/server'
+import { apiError } from '@/server/helpers/problem'
 import { adminGuard } from '@/server/middleware/admin-guard'
 import { jobIdParamSchema, listJobsQuerySchema } from '@/server/schemas/jobs'
 import { zParam, zQuery } from '@/server/schemas/validator'
@@ -36,7 +37,7 @@ export function jobRoutes(deps: JobRouteDeps) {
   router.get('/api/v1/jobs/:id', zParam(jobIdParamSchema), async (c) => {
     const { id } = c.req.valid('param')
     const job = await deps.jobQueries.getJobById(id)
-    if (!job) return c.json({ error: 'Job not found' }, 404)
+    if (!job) return apiError(c, 404, 'Job not found')
     return c.json(job)
   })
 

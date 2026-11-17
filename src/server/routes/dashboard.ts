@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import type { AppDependencies } from '@/server'
 import { parseOptionalClampedInt } from '@/server/helpers/parse-int-clamp'
+import { apiError } from '@/server/helpers/problem'
 import { resolveAdmin } from '@/server/middleware/admin-guard'
 import type { HonoEnv } from '@/server/types'
 
@@ -23,7 +24,7 @@ export function dashboardRoutes(deps: AppDependencies) {
     const userId = c.get('userId')
     const limit = parseOptionalClampedInt(c.req.query('limit'), { min: 1, max: 20, default: 5 })
     if (limit == null) {
-      return c.json({ error: 'limit must be an integer' }, 400)
+      return apiError(c, 400, 'limit must be an integer')
     }
 
     const isAdmin = await resolveAdmin(userId, deps.getUserById, c.get('legacyTokenAuth'))

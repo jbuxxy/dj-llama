@@ -590,12 +590,7 @@ function NotificationChannelsCard({
       await testNotificationChannel(applyStoredSecrets(channel, hadSecret))
       toast.success('Test notification sent')
     } catch (err) {
-      let detail = ''
-      if (err instanceof ApiError && err.data && typeof err.data === 'object') {
-        const d = (err.data as Record<string, unknown>).detail
-        if (typeof d === 'string' && d.trim()) detail = d.trim()
-      }
-      toast.error(`Test failed: ${detail || 'Unknown error'}`)
+      toast.error(`Test failed: ${err instanceof ApiError ? err.message : 'Unknown error'}`)
     } finally {
       setTestingId(null)
     }
@@ -1123,14 +1118,6 @@ function ConnectionsTab({ settings, onSaved }: { settings: Settings; onSaved: ()
     return 'not_configured'
   }
 
-  function probeFailureDetail(err: unknown): string | null {
-    if (err instanceof ApiError && err.data && typeof err.data === 'object') {
-      const detail = (err.data as Record<string, unknown>).detail
-      if (typeof detail === 'string' && detail.trim()) return detail.trim()
-    }
-    return null
-  }
-
   function createTester(key: string, label: string, testFn: () => Promise<{ message: string }>) {
     return async () => {
       setTest(key, 'testing')
@@ -1141,8 +1128,7 @@ function ConnectionsTab({ settings, onSaved }: { settings: Settings; onSaved: ()
       } catch (err) {
         setTest(key, 'error')
         const base = formatLabelMessage('Could not reach {0}', label)
-        const detail = probeFailureDetail(err)
-        toast.error(detail ? `${base}: ${detail}` : base)
+        toast.error(err instanceof ApiError ? `${base}: ${err.message}` : base)
       }
     }
   }

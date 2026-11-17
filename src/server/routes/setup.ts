@@ -3,7 +3,7 @@ import { validateAiBaseUrl } from '@/core/url-safety'
 import type { SetupConfig } from '@/db/queries/settings'
 import { upsertSystemTarget } from '@/db/queries/targets'
 import type { AppDependencies } from '@/server'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import { requireAdmin } from '@/server/helpers/require-user'
 import { setupCompleteSchema } from '@/server/schemas/setup'
 import { zJson } from '@/server/schemas/validator'
@@ -37,7 +37,7 @@ export function setupRoutes(deps: AppDependencies) {
 
     const alreadyDone = await deps.isSetupComplete()
     if (alreadyDone) {
-      return c.json({ error: 'Setup already complete' }, 409)
+      return apiError(c, 409, 'Setup already complete')
     }
 
     const body = c.req.valid('json') as Record<string, unknown>
@@ -61,7 +61,7 @@ export function setupRoutes(deps: AppDependencies) {
     }
 
     if (missing.length > 0) {
-      return c.json({ error: 'Missing required fields', fields: missing }, 400)
+      return apiError(c, 400, 'Missing required fields', { fields: missing })
     }
 
     if (typeof sanitized.aiBaseUrl === 'string' && sanitized.aiBaseUrl.length > 0) {

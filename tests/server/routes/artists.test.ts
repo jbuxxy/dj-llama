@@ -244,7 +244,7 @@ describe('GET /api/v1/artists/:id/top-tracks', () => {
     const res = await authedRequest(app, '/api/v1/artists/999/top-tracks')
     expect(res.status).toBe(404)
     const body = await res.json()
-    expect(body).toHaveProperty('error', 'Artist not found')
+    expect(body).toHaveProperty('title', 'Artist not found')
   })
 
   it('returns cached tracks when fresh', async () => {

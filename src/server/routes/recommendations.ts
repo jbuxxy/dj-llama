@@ -20,7 +20,7 @@ import {
   type MonitorOption,
   PopularAlbumsError,
 } from '@/server/helpers/add-options'
-import { problem } from '@/server/helpers/problem'
+import { apiError, problem } from '@/server/helpers/problem'
 import {
   bulkRecommendationSchema,
   listRecommendationsQuerySchema,
@@ -267,10 +267,10 @@ export function recommendationRoutes(deps: AppDependencies) {
         const effectiveTargets = targetId ? targets.filter((t) => t.id === targetId) : targets
 
         if (targetId && effectiveTargets.length === 0) {
-          return c.json({ error: `Unknown targetId: ${targetId}` }, 400)
+          return apiError(c, 400, `Unknown targetId: ${targetId}`)
         }
         if (targetId && !effectiveTargets.some((t) => t.capabilities?.includes('addArtist'))) {
-          return c.json({ error: `Target does not support artist approval: ${targetId}` }, 400)
+          return apiError(c, 400, `Target does not support artist approval: ${targetId}`)
         }
 
         // Pre-warm SkyHook if any Lidarr target exists
@@ -314,12 +314,11 @@ export function recommendationRoutes(deps: AppDependencies) {
           )
         } catch (err) {
           if (monitorOption !== 'popular') throw err
-          return c.json(
-            {
-              error: err instanceof Error ? err.message : 'Popular albums could not be resolved',
-              code: err instanceof PopularAlbumsError ? err.code : undefined,
-            },
+          return apiError(
+            c,
             400,
+            err instanceof Error ? err.message : 'Popular albums could not be resolved',
+            { code: err instanceof PopularAlbumsError ? err.code : undefined },
           )
         }
 
@@ -460,10 +459,10 @@ export function recommendationRoutes(deps: AppDependencies) {
     const targets = userId ? await deps.getEnabledTargetsForUser(userId) : []
     const effectiveTargets = targetId ? targets.filter((t) => t.id === targetId) : targets
     if (targetId && effectiveTargets.length === 0) {
-      return c.json({ error: `Unknown targetId: ${targetId}` }, 400)
+      return apiError(c, 400, `Unknown targetId: ${targetId}`)
     }
     if (targetId && !effectiveTargets.some((t) => t.capabilities?.includes('addArtist'))) {
-      return c.json({ error: `Target does not support artist approval: ${targetId}` }, 400)
+      return apiError(c, 400, `Target does not support artist approval: ${targetId}`)
     }
 
     const addOptions = await buildAddOptions(deps, userId, undefined, {

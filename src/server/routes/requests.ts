@@ -28,6 +28,7 @@ import { libraryAlbums, mergePreferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
 import { buildAddOptions } from '@/server/helpers/add-options'
 import { notAuthenticated } from '@/server/helpers/auth-problems'
+import { apiError } from '@/server/helpers/problem'
 import { requireAdmin, requireUser } from '@/server/helpers/require-user'
 import {
   createRequestSchema,
@@ -371,7 +372,7 @@ export function requestRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
 
     const resolved = await getLidarrClient(deps)
-    if (!resolved) return c.json({ error: 'Lidarr is not configured' }, 503)
+    if (!resolved) return apiError(c, 503, 'Lidarr is not configured')
     const { client, imageBaseUrl } = resolved
 
     const { q } = c.req.valid('query')
@@ -469,7 +470,7 @@ export function requestRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
 
     const resolved = await getLidarrClient(deps)
-    if (!resolved) return c.json({ error: 'Lidarr is not configured' }, 503)
+    if (!resolved) return apiError(c, 503, 'Lidarr is not configured')
     const { client, imageBaseUrl } = resolved
 
     const { q } = c.req.valid('query')
@@ -483,7 +484,7 @@ export function requestRoutes(deps: AppDependencies) {
       entries = await searchTrackAlbums(createMusicBrainzClient(), q)
     } catch (err) {
       console.warn('[requests] track search failed:', errMsg(err))
-      return c.json({ error: 'MusicBrainz is busy -- try the search again in a moment.' }, 502)
+      return apiError(c, 502, 'MusicBrainz is busy -- try the search again in a moment.')
     }
 
     const [lidarrDownloaded, lidarrLookups] = await Promise.all([
@@ -529,7 +530,7 @@ export function requestRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
 
     const resolved = await getLidarrClient(deps)
-    if (!resolved) return c.json({ error: 'Lidarr is not configured' }, 503)
+    if (!resolved) return apiError(c, 503, 'Lidarr is not configured')
     const { client, imageBaseUrl } = resolved
 
     const { mbid } = c.req.valid('param')
@@ -541,7 +542,7 @@ export function requestRoutes(deps: AppDependencies) {
       return []
     })
     const artist = matches[0]
-    if (!artist) return c.json({ error: 'Artist not found' }, 404)
+    if (!artist) return apiError(c, 404, 'Artist not found')
 
     const lidarrCoverUrl = resolveImageUrl(
       artist.images?.find((img) => img.coverType === 'poster')?.url ?? artist.images?.[0]?.url,
@@ -567,7 +568,7 @@ export function requestRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
 
     const resolved = await getLidarrClient(deps)
-    if (!resolved) return c.json({ error: 'Lidarr is not configured' }, 503)
+    if (!resolved) return apiError(c, 503, 'Lidarr is not configured')
     const { client, imageBaseUrl } = resolved
 
     const { mbid } = c.req.valid('param')
@@ -590,7 +591,7 @@ export function requestRoutes(deps: AppDependencies) {
         }),
     ])
     const album = matches[0]
-    if (!album) return c.json({ error: 'Album not found' }, 404)
+    if (!album) return apiError(c, 404, 'Album not found')
 
     const alreadyOwned = await findAlreadyOwnedAlbums(deps.db, [
       {
@@ -645,7 +646,7 @@ export function requestRoutes(deps: AppDependencies) {
         },
       ])
       if (owned.has(body.releaseGroupMbid)) {
-        return c.json({ error: 'This album is already in your library' }, 409)
+        return apiError(c, 409, 'This album is already in your library')
       }
     }
 
@@ -710,7 +711,7 @@ export function requestRoutes(deps: AppDependencies) {
 
     const request = await getRequestById(deps.db, id)
     if (!request || request.requestedByUserId !== auth.userId) {
-      return c.json({ error: 'Request not found' }, 404)
+      return apiError(c, 404, 'Request not found')
     }
 
     // Added to Library: pure notification-style hide, never touches Lidarr --
@@ -718,12 +719,12 @@ export function requestRoutes(deps: AppDependencies) {
     if (!request.libraryConfirmedAt) {
       const cancel = await cancelRequestInTargets(deps, request, auth.userId)
       if (!cancel.success) {
-        return c.json({ error: cancel.error ?? 'Failed to cancel in Lidarr' }, 502)
+        return apiError(c, 502, cancel.error ?? 'Failed to cancel in Lidarr')
       }
     }
 
     const applied = await dismissRequest(deps.db, id, auth.userId)
-    if (!applied) return c.json({ error: 'Request not found' }, 404)
+    if (!applied) return apiError(c, 404, 'Request not found')
     return c.body(null, 204)
   })
 
@@ -800,9 +801,9 @@ export function requestRoutes(deps: AppDependencies) {
 
     const { id } = c.req.valid('param')
     const request = await getRequestById(deps.db, id)
-    if (!request) return c.json({ error: 'Request not found' }, 404)
+    if (!request) return apiError(c, 404, 'Request not found')
     if (request.status !== 'pending') {
-      return c.json({ error: `Request is already ${request.status}` }, 409)
+      return apiError(c, 409, `Request is already ${request.status}`)
     }
 
     const { status, targetActions } = await dispatchRequest(
@@ -816,7 +817,7 @@ export function requestRoutes(deps: AppDependencies) {
       targetActions,
     })
     if (!applied) {
-      return c.json({ error: 'Request was already decided' }, 409)
+      return apiError(c, 409, 'Request was already decided')
     }
     realtimeBroker.publish(request.requestedByUserId, { type: 'request-updated', requestId: id })
     return c.json({ ...request, status, targetActions, decidedByUserId: auth.userId })
@@ -833,9 +834,9 @@ export function requestRoutes(deps: AppDependencies) {
       const { id } = c.req.valid('param')
       const { rejectionReason } = c.req.valid('json')
       const request = await getRequestById(deps.db, id)
-      if (!request) return c.json({ error: 'Request not found' }, 404)
+      if (!request) return apiError(c, 404, 'Request not found')
       if (request.status !== 'pending') {
-        return c.json({ error: `Request is already ${request.status}` }, 409)
+        return apiError(c, 409, `Request is already ${request.status}`)
       }
 
       const applied = await resolvePendingRequest(deps.db, id, {
@@ -844,7 +845,7 @@ export function requestRoutes(deps: AppDependencies) {
         rejectionReason,
       })
       if (!applied) {
-        return c.json({ error: 'Request was already decided' }, 409)
+        return apiError(c, 409, 'Request was already decided')
       }
       realtimeBroker.publish(request.requestedByUserId, { type: 'request-updated', requestId: id })
       return c.json({
@@ -866,7 +867,7 @@ export function requestRoutes(deps: AppDependencies) {
     if (!auth.ok) return auth.response
     const userId = auth.userId
     if (retryingUsers.has(userId)) {
-      return c.json({ error: 'A retry of failed requests is already running' }, 409)
+      return apiError(c, 409, 'A retry of failed requests is already running')
     }
 
     const failed = await listFailedOpenRequests(deps.db, userId)
@@ -915,13 +916,13 @@ export function requestRoutes(deps: AppDependencies) {
 
     const { id } = c.req.valid('param')
     const request = await getRequestById(deps.db, id)
-    if (!request) return c.json({ error: 'Request not found' }, 404)
+    if (!request) return apiError(c, 404, 'Request not found')
 
     const actor = await deps.getUserById(auth.userId)
     if (!actor) return notAuthenticated(c)
     const isOwnRequest = request.requestedByUserId === auth.userId
     if (!isOwnRequest && !actor.isAdmin && !actor.isOwner) {
-      return c.json({ error: 'Not authorized to retry this request' }, 403)
+      return apiError(c, 403, 'Not authorized to retry this request')
     }
 
     const owner = await deps.getUserById(request.requestedByUserId)
@@ -931,7 +932,7 @@ export function requestRoutes(deps: AppDependencies) {
       request.status === 'failed' ||
       (request.status === 'pending' && request.targetActions == null && ownerAutoDispatches)
     if (!retryable) {
-      return c.json({ error: `Request is ${request.status} and cannot be retried` }, 409)
+      return apiError(c, 409, `Request is ${request.status} and cannot be retried`)
     }
 
     const { status, targetActions } = await dispatchRequest(

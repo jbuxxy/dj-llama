@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { isPrivateUrl } from '@/core/validation'
 import type { AppDependencies } from '@/server'
+import { apiError } from '@/server/helpers/problem'
 
 const ALLOWED_HOSTS = new Set(['img.theaudiodb.com', 'theaudiodb.com', 'www.theaudiodb.com'])
 
@@ -10,26 +11,26 @@ export function mediaRoutes(deps: AppDependencies) {
   router.get('/api/v1/media/image-proxy', async (c) => {
     const settings = await deps.getSettings()
     if (!settings?.audiodbProxyImages) {
-      return c.json({ error: 'Not found' }, 404)
+      return apiError(c, 404, 'Not found')
     }
 
     const src = c.req.query('src')
-    if (!src) return c.json({ error: 'Missing src' }, 400)
+    if (!src) return apiError(c, 400, 'Missing src')
 
     let url: URL
     try {
       url = new URL(src)
     } catch {
-      return c.json({ error: 'Invalid src URL' }, 400)
+      return apiError(c, 400, 'Invalid src URL')
     }
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
-      return c.json({ error: 'Only http/https supported' }, 400)
+      return apiError(c, 400, 'Only http/https supported')
     }
     if (!ALLOWED_HOSTS.has(url.hostname)) {
-      return c.json({ error: 'Host not permitted' }, 400)
+      return apiError(c, 400, 'Host not permitted')
     }
     if (isPrivateUrl(url.href)) {
-      return c.json({ error: 'Private address rejected' }, 400)
+      return apiError(c, 400, 'Private address rejected')
     }
 
     try {
@@ -41,10 +42,10 @@ export function mediaRoutes(deps: AppDependencies) {
         redirect: 'manual',
         signal: controller.signal,
       }).finally(() => clearTimeout(timer))
-      if (!upstream.ok) return c.json({ error: 'Upstream fetch failed' }, 502)
+      if (!upstream.ok) return apiError(c, 502, 'Upstream fetch failed')
       const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream'
       if (!contentType.startsWith('image/')) {
-        return c.json({ error: 'Non-image content-type' }, 502)
+        return apiError(c, 502, 'Non-image content-type')
       }
       return new Response(upstream.body, {
         status: 200,
@@ -54,7 +55,7 @@ export function mediaRoutes(deps: AppDependencies) {
         },
       })
     } catch {
-      return c.json({ error: 'Upstream fetch failed' }, 502)
+      return apiError(c, 502, 'Upstream fetch failed')
     }
   })
 

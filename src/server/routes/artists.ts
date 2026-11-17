@@ -10,6 +10,7 @@ import type { TopTrack, TopTracksCache } from '@/db/schema'
 import { artists } from '@/db/schema'
 import type { AppDependencies } from '@/server'
 import { parsePositiveIntParam } from '@/server/helpers/parse-int-clamp'
+import { apiError } from '@/server/helpers/problem'
 import { rateLimiter } from '@/server/middleware/rate-limit'
 
 const ENRICHMENT_TTL_MS = 30 * 24 * 60 * 60 * 1000
@@ -40,20 +41,20 @@ export function artistRoutes(deps: AppDependencies) {
 
   router.get('/api/v1/artists/:id', async (c) => {
     const id = parsePositiveIntParam(c.req.param('id'))
-    if (id == null) return c.json({ error: 'Invalid artist ID' }, 400)
+    if (id == null) return apiError(c, 400, 'Invalid artist ID')
     const artist = await deps.getArtistById(id)
     if (!artist) {
-      return c.json({ error: 'Artist not found' }, 404)
+      return apiError(c, 404, 'Artist not found')
     }
     return c.json(artist)
   })
 
   router.get('/api/v1/artists/:id/top-tracks', async (c) => {
     const id = parsePositiveIntParam(c.req.param('id'))
-    if (id == null) return c.json({ error: 'Invalid artist ID' }, 400)
+    if (id == null) return apiError(c, 400, 'Invalid artist ID')
     const artist = await deps.getArtistById(id)
     if (!artist) {
-      return c.json({ error: 'Artist not found' }, 404)
+      return apiError(c, 404, 'Artist not found')
     }
 
     const album = c.req.query('album')
@@ -146,13 +147,13 @@ export function artistRoutes(deps: AppDependencies) {
   // returns in full, so the embed always matches that list's #1 entry.
   router.get('/api/v1/artists/:id/album-preview', async (c) => {
     const id = parsePositiveIntParam(c.req.param('id'))
-    if (id == null) return c.json({ error: 'Invalid artist ID' }, 400)
+    if (id == null) return apiError(c, 400, 'Invalid artist ID')
     const album = c.req.query('album')
-    if (!album) return c.json({ error: 'Missing album query param' }, 400)
+    if (!album) return apiError(c, 400, 'Missing album query param')
 
     const artist = await deps.getArtistById(id)
     if (!artist) {
-      return c.json({ error: 'Artist not found' }, 404)
+      return apiError(c, 404, 'Artist not found')
     }
 
     const tracks = await getAlbumTracksRankedByPopularity(artist.name, album).catch(() => [])
@@ -170,22 +171,22 @@ export function artistRoutes(deps: AppDependencies) {
     async (c) => {
       const url = c.req.query('url')
       if (!url?.match(/^https:\/\/cdn[st]-?preview[a-z0-9-]*\.dzcdn\.net\//)) {
-        return c.json({ error: 'Invalid preview URL' }, 400)
+        return apiError(c, 400, 'Invalid preview URL')
       }
       try {
         const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
         const contentType = res.headers.get('Content-Type') ?? ''
         if (!res.ok || !contentType.startsWith('audio/')) {
-          return c.json({ error: 'Preview not available', status: res.status, contentType }, 502)
+          return apiError(c, 502, 'Preview not available', { status: res.status, contentType })
         }
         const MAX_PREVIEW_BYTES = 2 * 1024 * 1024
         const cl = res.headers.get('Content-Length')
         if (cl && Number(cl) > MAX_PREVIEW_BYTES) {
-          return c.json({ error: 'Preview too large' }, 502)
+          return apiError(c, 502, 'Preview too large')
         }
         const audioBuffer = await res.arrayBuffer()
         if (audioBuffer.byteLength > MAX_PREVIEW_BYTES) {
-          return c.json({ error: 'Preview too large' }, 502)
+          return apiError(c, 502, 'Preview too large')
         }
         return new Response(audioBuffer, {
           headers: {
@@ -195,17 +196,17 @@ export function artistRoutes(deps: AppDependencies) {
           },
         })
       } catch {
-        return c.json({ error: 'Preview fetch failed' }, 502)
+        return apiError(c, 502, 'Preview fetch failed')
       }
     },
   )
 
   router.get('/api/v1/artists/:id/enrichment', async (c) => {
     const id = parsePositiveIntParam(c.req.param('id'))
-    if (id == null) return c.json({ error: 'Invalid artist ID' }, 400)
+    if (id == null) return apiError(c, 400, 'Invalid artist ID')
 
     const row = await deps.db.query.artists.findFirst({ where: eq(artists.id, id) })
-    if (!row) return c.json({ error: 'Artist not found' }, 404)
+    if (!row) return apiError(c, 404, 'Artist not found')
 
     const emptyPayload = { description: null, externalLinks: {}, wikidataId: null }
 
@@ -262,7 +263,7 @@ export function artistRoutes(deps: AppDependencies) {
   router.get('/api/v1/albums/:mbid', async (c) => {
     const mbid = c.req.param('mbid')
     if (!isValidMbid(mbid)) {
-      return c.json({ error: 'Invalid MBID format' }, 400)
+      return apiError(c, 400, 'Invalid MBID format')
     }
     // An artist's discography barely changes; one live MusicBrainz call
     // (~1 req/s, shared with scans) per artist per 6h is plenty.

@@ -177,7 +177,7 @@ describe('setup guard', () => {
     })
     expect(res.status).toBe(403)
     const body = await res.json()
-    expect(body.error).toBe('Setup not complete')
+    expect(body.title).toBe('Setup not complete')
     expect(body.redirect).toBe('/setup')
   })
 

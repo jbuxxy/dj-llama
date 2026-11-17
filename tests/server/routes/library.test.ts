@@ -390,7 +390,7 @@ describe('POST /api/v1/library/health/:checkId/fix', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toBe('Invalid check ID')
+    expect(body.title).toBe('Invalid check ID')
   })
 
   it('returns 400 when fixCheck throws', async () => {
@@ -406,7 +406,7 @@ describe('POST /api/v1/library/health/:checkId/fix', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toBe('An unexpected error occurred')
+    expect(body.title).toBe('An unexpected error occurred')
   })
 
   it('rejects checks that were removed', async () => {
@@ -470,7 +470,7 @@ describe('POST /api/v1/library/warm', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/not available/i)
+    expect(body.title).toMatch(/not available/i)
   })
 
   it('returns 400 for missing mbids', async () => {
@@ -483,7 +483,7 @@ describe('POST /api/v1/library/warm', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error.toLowerCase()).toContain('mbids')
+    expect(body.title.toLowerCase()).toContain('mbids')
   })
 
   it('returns 400 for empty mbids array', async () => {
@@ -496,7 +496,7 @@ describe('POST /api/v1/library/warm', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error.toLowerCase()).toContain('mbids')
+    expect(body.title.toLowerCase()).toContain('mbids')
   })
 
   it('limits batch to 50 MBIDs', async () => {
@@ -1072,7 +1072,7 @@ describe('POST /api/v1/library/overrides', () => {
     })
     expect(res.status).toBe(400)
     const body = await res.json()
-    expect(body.error).toMatch(/source/i)
+    expect(body.title).toMatch(/source/i)
   })
 })
 

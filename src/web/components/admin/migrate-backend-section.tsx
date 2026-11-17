@@ -39,11 +39,10 @@ function isPostgresUrl(value: string): boolean {
 }
 
 function apiMessage(err: unknown, fallback: string): string {
-  if (err instanceof ApiError && err.data && typeof err.data === 'object') {
-    const data = err.data as { code?: unknown; error?: unknown; detail?: unknown; title?: unknown }
-    if (typeof data.code === 'string' && TEST_ERRORS[data.code])
-      return TEST_ERRORS[data.code] as string
-    for (const v of [data.detail, data.error, data.title]) if (typeof v === 'string' && v) return v
+  if (err instanceof ApiError) {
+    const code = (err.data as { code?: unknown } | null)?.code
+    if (typeof code === 'string' && TEST_ERRORS[code]) return TEST_ERRORS[code] as string
+    return err.message
   }
   return fallback
 }

@@ -9,6 +9,7 @@ import { SOURCE_NOT_CONFIGURED_ERROR, type SyncOrchestrator } from '@/core/libra
 import type { HealthCheckId } from '@/core/library/types'
 import { errMsg, isValidMbid, logAndSanitize } from '@/core/validation'
 import type { Database } from '@/db'
+import { apiError } from '@/server/helpers/problem'
 import { requireAdmin, requireSessionUser } from '@/server/helpers/require-user'
 import { rateLimiter } from '@/server/middleware/rate-limit'
 import {
@@ -67,13 +68,13 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
     if (!auth.ok) return auth.response
     const checkId = c.req.param('checkId')
     if (!VALID_CHECK_IDS.has(checkId)) {
-      return c.json({ error: 'Invalid check ID' }, 400)
+      return apiError(c, 400, 'Invalid check ID')
     }
     try {
       const progress = await deps.libraryHealth.fixCheck(checkId as HealthCheckId)
       return c.json(progress)
     } catch (err: unknown) {
-      return c.json({ error: logAndSanitize(err, 'library-health-fix') }, 400)
+      return apiError(c, 400, logAndSanitize(err, 'library-health-fix'))
     }
   })
 
@@ -88,7 +89,7 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
     const auth = await adminGate(c)
     if (!auth.ok) return auth.response
     if (!deps.skyhookWarmer) {
-      return c.json({ error: 'SkyHook warming not available (Lidarr not configured)' }, 400)
+      return apiError(c, 400, 'SkyHook warming not available (Lidarr not configured)')
     }
     const { mbids } = c.req.valid('json')
     const batch = mbids.slice(0, 50) // Runtime cap; schema allows up to 200 for future use.
@@ -193,7 +194,7 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
     if (!auth.ok) return auth.response
     const artistMbid = c.req.param('artistMbid')
     if (!isValidMbid(artistMbid)) {
-      return c.json({ error: 'artistMbid must be a valid UUID' }, 400)
+      return apiError(c, 400, 'artistMbid must be a valid UUID')
     }
     const coverage = await deps.albumCoverage.getCoverageForArtist(auth.userId, artistMbid)
     return c.json(coverage)

@@ -3,6 +3,7 @@ import type { AppDependencies } from '@/server'
 import { readPagination } from '@/server/helpers/pagination'
 import { encodeCursor } from '@/server/helpers/pagination-cursor'
 import { parsePositiveIntParam } from '@/server/helpers/parse-int-clamp'
+import { apiError } from '@/server/helpers/problem'
 import { adminGuard } from '@/server/middleware/admin-guard'
 
 export function batchRoutes(deps: AppDependencies) {
@@ -25,10 +26,10 @@ export function batchRoutes(deps: AppDependencies) {
 
   router.get('/api/v1/batches/:id', adminGuard(deps.getUserById), async (c) => {
     const id = parsePositiveIntParam(c.req.param('id'))
-    if (id == null) return c.json({ error: 'Invalid batch ID' }, 400)
+    if (id == null) return apiError(c, 400, 'Invalid batch ID')
     const batch = await deps.getBatch(id)
     if (!batch) {
-      return c.json({ error: 'Batch not found' }, 404)
+      return apiError(c, 404, 'Batch not found')
     }
     return c.json(batch)
   })

@@ -1,4 +1,5 @@
 import type { Context, Next } from 'hono'
+import { apiError } from '@/server/helpers/problem'
 
 // Paths exempt from the setup-complete check (pre-setup accessible)
 const SETUP_EXEMPT = new Set([
@@ -22,7 +23,7 @@ export function setupGuard(isSetupComplete: () => Promise<boolean>) {
     if (path.startsWith('/api/v1/')) {
       const complete = await isSetupComplete()
       if (!complete) {
-        return c.json({ error: 'Setup not complete', redirect: '/setup' }, 403)
+        return apiError(c, 403, 'Setup not complete', { redirect: '/setup' })
       }
     }
     return next()
