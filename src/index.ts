@@ -860,17 +860,18 @@ async function findExistingTrackFile(
 async function autoRequestMissingPlaylistTracks(
   ownerId: number,
   playlistId: number,
-): Promise<void> {
+  onProgress?: (message: string, current?: number, total?: number) => void,
+): Promise<{ missing: number; requested: number }> {
   const settings = await getSettings(db)
-  if (!settings?.lidarrUrl || !settings?.lidarrApiKey) return
+  if (!settings?.lidarrUrl || !settings?.lidarrApiKey) return { missing: 0, requested: 0 }
 
   const missing = await listPlaylistMissingTracks(db, playlistId)
-  if (missing.length === 0) return
+  if (missing.length === 0) return { missing: 0, requested: 0 }
 
   const owner = await getUserById(db, ownerId)
-  if (!owner) return
+  if (!owner) return { missing: missing.length, requested: 0 }
 
-  const lidarr = createLidarrClient(
+  const lidarr = getSharedLidarrClient(
     settings.lidarrUrl,
     settings.lidarrApiKey,
     settings.skipTlsVerify ?? false,
@@ -949,7 +950,10 @@ async function autoRequestMissingPlaylistTracks(
   let resolvedViaMusicBrainzCount = 0
   let resolvedFromCacheCount = 0
   let alreadyDownloadedCount = 0
+  let checkedCount = 0
   for (const track of missing) {
+    checkedCount++
+    onProgress?.(`Finding the album for "${track.trackName}"`, checkedCount, missing.length)
     // Skip resolution entirely when the artist's Lidarr catalog already has
     // a real downloaded file for this exact song -- see findExistingTrackFile's
     // doc comment. Only checked when the artist is already known to Lidarr;
@@ -1157,7 +1161,7 @@ async function autoRequestMissingPlaylistTracks(
         `[playlist-import] Auto-request for playlist ${playlistId}: ${alreadyDownloadedCount} missing track(s) already have a downloaded Lidarr file (skipped -- likely just needs a Plex library rescan), 0 requested`,
       )
     }
-    return
+    return { missing: missing.length, requested: 0 }
   }
 
   // Counts logged once at the end (see below) -- this function previously had
@@ -1426,6 +1430,7 @@ async function autoRequestMissingPlaylistTracks(
     `[playlist-import] Auto-request for playlist ${playlistId}: ${albumTargets.size} missing album(s) considered (${resolvedViaMusicBrainzCount} resolved via MusicBrainz, ${resolvedFromCacheCount} from cache), ${requestedCount} requested, ${skippedExistingCount} already in flight, ${unmatchedCount} not found in Lidarr, ${alreadyDownloadedCount} already downloaded (skipped)`,
   )
   if (anyChanged) realtimeBroker.publish(ownerId, { type: 'library-updated' })
+  return { missing: missing.length, requested: requestedCount }
 }
 
 // Every source returns the same entry shape (artist/track/album, plus the
@@ -1490,6 +1495,47 @@ async function backfillImportedPlaylistArt(): Promise<void> {
 // into Plex -- it has no artist-selection step, so it bypasses
 // generatePlaylist() entirely rather than shoehorning into the
 // selectArtists -> resolveTracks shape every other strategy uses.
+// One at a time (they all funnel into the same Lidarr write throttle and
+// MusicBrainz queue anyway), deduped per playlist.
+let missingTrackRequestTail: Promise<unknown> = Promise.resolve()
+const queuedMissingTrackRequests = new Set<number>()
+
+function scheduleMissingTrackRequests(ownerId: number, playlistId: number, name: string): void {
+  if (queuedMissingTrackRequests.has(playlistId)) return
+  queuedMissingTrackRequests.add(playlistId)
+  const run = missingTrackRequestTail.then(() => {
+    queuedMissingTrackRequests.delete(playlistId)
+    return trackActivity(
+      ownerId,
+      {
+        kind: 'lidarr_dispatch',
+        ref: `playlist-missing:${playlistId}`,
+        label: `Requesting missing songs: ${name}`,
+        message: 'Checking which songs are missing...',
+      },
+      (job) =>
+        autoRequestMissingPlaylistTracks(ownerId, playlistId, (message, current, total) =>
+          job?.update({ message, current, total }),
+        ),
+      (result) =>
+        result.missing === 0
+          ? { resultSummary: 'Nothing missing', current: undefined, total: undefined }
+          : {
+              resultSummary:
+                result.requested > 0
+                  ? `Requested ${result.requested} album${result.requested === 1 ? '' : 's'} for ${result.missing} missing song${result.missing === 1 ? '' : 's'}`
+                  : `${result.missing} missing song${result.missing === 1 ? '' : 's'}, nothing new to request`,
+              resultHref: `/playlists/${playlistId}`,
+              current: undefined,
+              total: undefined,
+            },
+    )
+  })
+  missingTrackRequestTail = run.catch((err) =>
+    console.error(`[playlist-import] missing-track requests failed for ${playlistId}:`, err),
+  )
+}
+
 async function executePlaylistImport(playlist: PlaylistRow, jobId: number | null): Promise<void> {
   if (playlist.userId == null) {
     throw new Error('Playlist import requires a playlist owner')
@@ -1550,7 +1596,12 @@ async function executePlaylistImport(playlist: PlaylistRow, jobId: number | null
     pushedToPlex: playlist.autoPushToPlex === true,
   })
 
-  await autoRequestMissingPlaylistTracks(playlist.userId, playlist.id)
+  // Requesting the misses from Lidarr (MusicBrainz resolution at ~1 req/s
+  // plus serialized Lidarr adds) can take many minutes. It used to run inside
+  // the playlist queue, so one big import held up every other playlist's
+  // Generate. The import itself is done here, so hand that off to its own
+  // background chain and free the playlist queue now.
+  scheduleMissingTrackRequests(playlist.userId, playlist.id, playlistName)
 
   console.log(
     `[playlist-import] '${playlistName}': ${importResult.tracksMatched}/${importResult.tracksTotal} tracks matched, ${importResult.missingCount} missing`,

@@ -9,6 +9,7 @@ import {
   RECOMMENDATION_SYSTEM_PRELUDE,
   validateAiRecommendations,
 } from './prompt'
+import { RecommendationStreamParser } from './stream-parse'
 import { DEFAULT_SDK_TIMEOUT_MS, optionalTimeoutSecondsToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
@@ -36,8 +37,7 @@ export class AnthropicProvider implements RecommendationProvider {
     this.model = model
   }
 
-  async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
-    this.lastUsage = null
+  private buildRequest(profile: TasteProfile) {
     const schema = getAiRecommendationsJsonSchema() as {
       type: string
       properties: Record<string, unknown>
@@ -51,7 +51,7 @@ export class AnthropicProvider implements RecommendationProvider {
       ? buildRecommendationUserTurn(profile)
       : buildRecommendationPrompt(profile)
 
-    const response = await this.client.messages.create({
+    return {
       model: this.model,
       max_tokens: 4096,
       ...(useCachedPrelude
@@ -61,43 +61,68 @@ export class AnthropicProvider implements RecommendationProvider {
             // the 5-minute TTL read from it at ~10% of input-token cost.
             system: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: RECOMMENDATION_SYSTEM_PRELUDE,
-                cache_control: { type: 'ephemeral' },
+                cache_control: { type: 'ephemeral' as const },
               },
             ],
           }
         : {}),
-      messages: [{ role: 'user', content: userContent }],
+      messages: [{ role: 'user' as const, content: userContent }],
       tools: [
         {
           name: RECOMMENDATION_TOOL_NAME,
           description:
             'Emit the structured recommendation list. Call this tool exactly once with the complete array of recommendations.',
           input_schema: {
-            type: 'object',
+            type: 'object' as const,
             properties: schema.properties,
             required: schema.required ?? ['recommendations'],
           },
         },
       ],
-      tool_choice: { type: 'tool', name: RECOMMENDATION_TOOL_NAME },
-    })
+      tool_choice: { type: 'tool' as const, name: RECOMMENDATION_TOOL_NAME },
+    }
+  }
 
-    this.lastUsage = extractUsage(this.model, response.usage)
+  private parseMessage(message: Anthropic.Messages.Message): AiRecommendation[] {
+    this.lastUsage = extractUsage(this.model, message.usage)
 
-    const toolUse = response.content.find((block) => block.type === 'tool_use')
+    const toolUse = message.content.find((block) => block.type === 'tool_use')
     if (toolUse && toolUse.type === 'tool_use') {
       return validateAiRecommendations(toolUse.input)
     }
 
     // Fallback: some proxy deployments drop tool_use support - parse any text
     // block as a JSON array the old way.
-    const firstContent = response.content[0]
+    const firstContent = message.content[0]
     if (firstContent?.type !== 'text') {
       throw new Error('Unexpected response format from Anthropic API')
     }
     return parseRecommendationResponse(firstContent.text)
+  }
+
+  async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const response = await this.client.messages.create(this.buildRequest(profile))
+    return this.parseMessage(response)
+  }
+
+  async streamRecommendations(
+    profile: TasteProfile,
+    onRecommendation: (rec: AiRecommendation) => void,
+  ): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const parser = new RecommendationStreamParser(onRecommendation)
+    const stream = this.client.messages.stream(this.buildRequest(profile))
+    for await (const event of stream) {
+      if (event.type !== 'content_block_delta') continue
+      // The forced tool call streams its arguments as partial JSON; the text
+      // fallback (proxies without tool support) streams as text.
+      if (event.delta.type === 'input_json_delta') parser.push(event.delta.partial_json)
+      else if (event.delta.type === 'text_delta') parser.push(event.delta.text)
+    }
+    return this.parseMessage(await stream.finalMessage())
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {

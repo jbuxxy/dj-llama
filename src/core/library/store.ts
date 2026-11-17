@@ -1,4 +1,4 @@
-import { and, eq, getTableColumns, isNotNull, isNull, or } from 'drizzle-orm'
+import { and, eq, getTableColumns, inArray, isNotNull, isNull, or } from 'drizzle-orm'
 import {
   type LibrarySyncCounts,
   libraryAlbumMatchOverrides,
@@ -184,6 +184,149 @@ export function createLibrarySyncStore(database: Db): LibrarySyncStore {
     return userId === null ? isNull(libraryArtists.userId) : eq(libraryArtists.userId, userId)
   }
 
+  // Library sync used to DELETE every row for (user, source) and re-INSERT
+  // the whole snapshot in one transaction on every run: thousands of row
+  // writes plus index maintenance even when nothing changed, holding locks
+  // the whole time -- and it reset per-row state like lastGapCheckAt (the
+  // gap-fill rotation cursor) on every sync. Now it diffs against what's
+  // stored: insert new rows, update only rows whose data changed, delete
+  // rows that disappeared. A key-based upsert can't do this because
+  // user_id is NULL for shared Lidarr rows and NULLs never conflict.
+  type ArtistData = {
+    name: string
+    nameNormalized: string
+    mbid: string | null
+    matchMethod: string | null
+    matchConfidence: number | null
+    genres: string[] | null
+  }
+  type AlbumData = {
+    sourceArtistId: string
+    title: string
+    titleNormalized: string
+    albumMbid: string | null
+    artistMbid: string | null
+    releaseYear: number | null
+    primaryType: string | null
+    matchMethod: string | null
+    matchConfidence: number | null
+  }
+
+  function sameValue(a: unknown, b: unknown): boolean {
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+      return a.every((v, i) => v === b[i])
+    }
+    // match_confidence is a float4 column: 0.85 reads back as 0.8500000238,
+    // which must not count as a change or every row would rewrite each sync.
+    if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b) < 1e-5
+    return (a ?? null) === (b ?? null)
+  }
+
+  function changed<T extends Record<string, unknown>>(stored: T, next: T): boolean {
+    return Object.keys(next).some((k) => !sameValue(stored[k], next[k]))
+  }
+
+  async function diffSyncArtists(
+    tx: Db,
+    userId: number | null,
+    source: string,
+    artists: ReconciledArtist[],
+  ): Promise<void> {
+    const userClause = makeUserClause(userId)
+    const existing = await tx
+      .select()
+      .from(libraryArtists)
+      .where(and(userClause, eq(libraryArtists.source, source)))
+    const byKey = new Map(existing.map((r) => [r.sourceArtistId, r]))
+    const seen = new Set<string>()
+    const inserts: Array<
+      ArtistData & { userId: number | null; source: string; sourceArtistId: string }
+    > = []
+    const now = new Date()
+    for (const a of artists) {
+      // A duplicate id in one snapshot is inserted again (as the old
+      // truncate-and-insert did) so the unique index rejects it and the
+      // whole snapshot rolls back, instead of being silently merged.
+      const duplicate = seen.has(a.sourceArtistId)
+      seen.add(a.sourceArtistId)
+      const data: ArtistData = {
+        name: a.name,
+        nameNormalized: a.nameNormalized,
+        mbid: a.mbid,
+        matchMethod: a.matchMethod,
+        matchConfidence: a.matchConfidence,
+        genres: a.genres ?? null,
+      }
+      const stored = byKey.get(a.sourceArtistId)
+      if (!stored || duplicate) {
+        inserts.push({ userId, source, sourceArtistId: a.sourceArtistId, ...data })
+      } else if (changed(stored as unknown as ArtistData, data)) {
+        await tx
+          .update(libraryArtists)
+          .set({ ...data, syncedAt: now })
+          .where(eq(libraryArtists.id, stored.id))
+      }
+    }
+    const removed = existing.filter((r) => !seen.has(r.sourceArtistId)).map((r) => r.id)
+    for (let i = 0; i < removed.length; i += 1000) {
+      await tx.delete(libraryArtists).where(inArray(libraryArtists.id, removed.slice(i, i + 1000)))
+    }
+    await insertRowsInChunks(tx, libraryArtists, inserts)
+  }
+
+  async function diffSyncAlbums(
+    tx: Db,
+    userId: number | null,
+    source: string,
+    albums: ReconciledAlbum[],
+  ): Promise<void> {
+    const userClause =
+      userId === null ? isNull(libraryAlbums.userId) : eq(libraryAlbums.userId, userId)
+    const existing = await tx
+      .select()
+      .from(libraryAlbums)
+      .where(and(userClause, eq(libraryAlbums.source, source)))
+    const byKey = new Map(existing.map((r) => [r.sourceAlbumId, r]))
+    const seen = new Set<string>()
+    const inserts: Array<
+      AlbumData & { userId: number | null; source: string; sourceAlbumId: string }
+    > = []
+    const now = new Date()
+    for (const album of albums) {
+      // A duplicate id in one snapshot is inserted again (as the old
+      // truncate-and-insert did) so the unique index rejects it and the
+      // whole snapshot rolls back, instead of being silently merged.
+      const duplicate = seen.has(album.sourceAlbumId)
+      seen.add(album.sourceAlbumId)
+      const data: AlbumData = {
+        sourceArtistId: album.sourceArtistId,
+        title: album.title,
+        titleNormalized: album.titleNormalized,
+        albumMbid: album.albumMbid,
+        artistMbid: album.artistMbid,
+        releaseYear: album.releaseYear,
+        primaryType: album.primaryType,
+        matchMethod: album.matchMethod,
+        matchConfidence: album.matchConfidence,
+      }
+      const stored = byKey.get(album.sourceAlbumId)
+      if (!stored || duplicate) {
+        inserts.push({ userId, source, sourceAlbumId: album.sourceAlbumId, ...data })
+      } else if (changed(stored as unknown as AlbumData, data)) {
+        await tx
+          .update(libraryAlbums)
+          .set({ ...data, syncedAt: now })
+          .where(eq(libraryAlbums.id, stored.id))
+      }
+    }
+    const removed = existing.filter((r) => !seen.has(r.sourceAlbumId)).map((r) => r.id)
+    for (let i = 0; i < removed.length; i += 1000) {
+      await tx.delete(libraryAlbums).where(inArray(libraryAlbums.id, removed.slice(i, i + 1000)))
+    }
+    await insertRowsInChunks(tx, libraryAlbums, inserts)
+  }
+
   function countArtists(artists: ReconciledArtist[]): LibrarySyncCounts {
     const counts = emptyLibrarySyncCounts()
     for (const a of artists) {
@@ -273,53 +416,8 @@ export function createLibrarySyncStore(database: Db): LibrarySyncStore {
       counts.albumsSynced = albums.length
 
       await database.transaction(async (tx) => {
-        const artistUserClause =
-          userId === null ? isNull(libraryArtists.userId) : eq(libraryArtists.userId, userId)
-        const albumUserClause =
-          userId === null ? isNull(libraryAlbums.userId) : eq(libraryAlbums.userId, userId)
-        await tx
-          .delete(libraryArtists)
-          .where(and(artistUserClause, eq(libraryArtists.source, source)))
-        await tx.delete(libraryAlbums).where(and(albumUserClause, eq(libraryAlbums.source, source)))
-
-        if (artists.length > 0) {
-          await insertRowsInChunks(
-            tx,
-            libraryArtists,
-            artists.map((a) => ({
-              userId,
-              source,
-              sourceArtistId: a.sourceArtistId,
-              name: a.name,
-              nameNormalized: a.nameNormalized,
-              mbid: a.mbid,
-              matchMethod: a.matchMethod,
-              matchConfidence: a.matchConfidence,
-              genres: a.genres,
-            })),
-          )
-        }
-
-        if (albums.length > 0) {
-          await insertRowsInChunks(
-            tx,
-            libraryAlbums,
-            albums.map((album) => ({
-              userId,
-              source,
-              sourceAlbumId: album.sourceAlbumId,
-              sourceArtistId: album.sourceArtistId,
-              title: album.title,
-              titleNormalized: album.titleNormalized,
-              albumMbid: album.albumMbid,
-              artistMbid: album.artistMbid,
-              releaseYear: album.releaseYear,
-              primaryType: album.primaryType,
-              matchMethod: album.matchMethod,
-              matchConfidence: album.matchConfidence,
-            })),
-          )
-        }
+        await diffSyncArtists(tx as unknown as Db, userId, source, artists)
+        await diffSyncAlbums(tx as unknown as Db, userId, source, albums)
       })
 
       return counts
@@ -329,26 +427,7 @@ export function createLibrarySyncStore(database: Db): LibrarySyncStore {
       const counts = countArtists(artists)
 
       await database.transaction(async (tx) => {
-        // Truncate per (userId, source)
-        const userClause = makeUserClause(userId)
-        await tx.delete(libraryArtists).where(and(userClause, eq(libraryArtists.source, source)))
-
-        if (artists.length === 0) return
-        await insertRowsInChunks(
-          tx,
-          libraryArtists,
-          artists.map((a) => ({
-            userId,
-            source,
-            sourceArtistId: a.sourceArtistId,
-            name: a.name,
-            nameNormalized: a.nameNormalized,
-            mbid: a.mbid,
-            matchMethod: a.matchMethod,
-            matchConfidence: a.matchConfidence,
-            genres: a.genres,
-          })),
-        )
+        await diffSyncArtists(tx as unknown as Db, userId, source, artists)
       })
 
       return counts
@@ -356,30 +435,7 @@ export function createLibrarySyncStore(database: Db): LibrarySyncStore {
 
     async replaceLibraryAlbums(userId, source, albums) {
       await database.transaction(async (tx) => {
-        const userClause =
-          userId === null ? isNull(libraryAlbums.userId) : eq(libraryAlbums.userId, userId)
-        await tx.delete(libraryAlbums).where(and(userClause, eq(libraryAlbums.source, source)))
-
-        if (albums.length === 0) return
-
-        await insertRowsInChunks(
-          tx,
-          libraryAlbums,
-          albums.map((album) => ({
-            userId,
-            source,
-            sourceAlbumId: album.sourceAlbumId,
-            sourceArtistId: album.sourceArtistId,
-            title: album.title,
-            titleNormalized: album.titleNormalized,
-            albumMbid: album.albumMbid,
-            artistMbid: album.artistMbid,
-            releaseYear: album.releaseYear,
-            primaryType: album.primaryType,
-            matchMethod: album.matchMethod,
-            matchConfidence: album.matchConfidence,
-          })),
-        )
+        await diffSyncAlbums(tx as unknown as Db, userId, source, albums)
       })
 
       return { total: albums.length }

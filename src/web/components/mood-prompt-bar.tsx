@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
-import { type FormEvent, useEffect, useState } from 'react'
+import { type FormEvent, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { watchJob } from '../lib/activity'
-import { getCurrentUser, getSettings, moodDiscover, quickDiscover } from '../lib/api'
+import { getCurrentUser, getSettings, moodDiscoverStream, quickDiscover } from '../lib/api'
 import { ArtistThumb } from './artist-thumb'
 import { Skeleton } from './ui/skeleton'
 
@@ -15,6 +15,18 @@ const MOOD_PHASES = [
   'Checking what you already own...',
   'Finding cover art...',
 ]
+
+function MoodResultSkeleton() {
+  return (
+    <div className="flex items-center gap-3 rounded border border-border bg-surface p-2">
+      <Skeleton className="h-12 w-12 shrink-0 rounded" />
+      <div className="flex-1 space-y-1.5">
+        <Skeleton className="h-3.5 w-3/4" />
+        <Skeleton className="h-3 w-1/2" />
+      </div>
+    </div>
+  )
+}
 
 function MoodSearchProgress() {
   const [elapsed, setElapsed] = useState(0)
@@ -35,16 +47,7 @@ function MoodSearchProgress() {
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="flex items-center gap-3 rounded border border-border bg-surface p-2"
-          >
-            <Skeleton className="h-12 w-12 shrink-0 rounded" />
-            <div className="flex-1 space-y-1.5">
-              <Skeleton className="h-3.5 w-3/4" />
-              <Skeleton className="h-3 w-1/2" />
-            </div>
-          </div>
+          <MoodResultSkeleton key={i} />
         ))}
       </div>
     </div>
@@ -78,6 +81,8 @@ export function MoodPromptBar({
     alreadyOwned: boolean
   }> | null>(null)
   const [loading, setLoading] = useState(false)
+  const abortRef = useRef<AbortController | null>(null)
+  useEffect(() => () => abortRef.current?.abort(), [])
   const [queued, setQueued] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
 
@@ -85,15 +90,41 @@ export function MoodPromptBar({
     e.preventDefault()
     if (!query.trim() || loading) return
     setLoading(true)
+    setResults([])
+    abortRef.current?.abort()
+    const controller = new AbortController()
+    abortRef.current = controller
+    let streamError: string | null = null
     try {
-      const res = await moodDiscover(query.trim())
-      setResults(res.results)
+      // Cards appear one by one as the AI writes them; cover art fills in
+      // after. Falls back to a single response on servers that don't stream.
+      await moodDiscoverStream(
+        query.trim(),
+        (event) => {
+          if (event.type === 'result') {
+            setResults((prev) => [...(prev ?? []), event.result])
+          } else if (event.type === 'cover') {
+            setResults((prev) =>
+              (prev ?? []).map((r) =>
+                r.artistName === event.artistName ? { ...r, coverUrl: event.coverUrl } : r,
+              ),
+            )
+          } else if (event.type === 'error') {
+            streamError = event.error
+          }
+        },
+        controller.signal,
+      )
+      if (streamError) throw new Error(streamError)
     } catch (err) {
+      if (controller.signal.aborted) return
+      // Keep whatever already streamed in; otherwise don't show "No matches".
+      setResults((prev) => (prev && prev.length > 0 ? prev : null))
       const detail = err instanceof Error ? err.message.trim() : ''
       // ApiError.message falls back to "API Error <status>" - still worth showing.
       toast.error(detail ? `Mood discovery failed: ${detail}` : 'Mood discovery failed')
     } finally {
-      setLoading(false)
+      if (abortRef.current === controller) setLoading(false)
     }
   }
 
@@ -151,11 +182,24 @@ export function MoodPromptBar({
           {loading ? 'Discovering...' : 'Discover'}
         </button>
       </form>
-      {loading && <MoodSearchProgress />}
-      {!loading && results && (
+      {loading && (results?.length ?? 0) === 0 && <MoodSearchProgress />}
+      {!loading && results && results.length === 0 && (
+        <p className="mt-3 text-sm text-muted">
+          No matches for that mood - try describing it differently.
+        </p>
+      )}
+      {results && results.length > 0 && (
         <div className="mt-3">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-text">Mood results ({results.length})</h3>
+            <h3 className="text-sm font-medium text-text flex items-center gap-2">
+              Mood results ({results.length})
+              {loading && (
+                <span className="flex items-center gap-1.5 text-xs font-normal text-muted">
+                  <span className="inline-block h-2 w-2 rounded-full bg-accent animate-pulse" />
+                  finding more...
+                </span>
+              )}
+            </h3>
             <button
               type="button"
               onClick={() => setResults(null)}
@@ -250,6 +294,7 @@ export function MoodPromptBar({
                 </div>
               )
             })}
+            {loading && <MoodResultSkeleton />}
           </div>
         </div>
       )}

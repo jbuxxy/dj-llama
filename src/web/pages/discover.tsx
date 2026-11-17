@@ -995,12 +995,22 @@ export function DiscoverPage() {
     if (checkedIds.size === 0) return
     setBulkActing(true)
     try {
-      // Live per-item progress toast ("Sending 3/12 to Lidarr").
-      if (checkedIds.size > 1) watchJob('bulk_action')
-      await bulkAction([...checkedIds], 'approve')
-      // Multi-item batches already got a live progress toast that resolves
-      // to "N sent to Lidarr"; don't stack a second one on top.
-      if (checkedIds.size === 1) toast.success('Approved 1')
+      const ids = [...checkedIds]
+      // Multi-item batches return immediately and run in the background
+      // with a live per-item toast ("Sending 3/12 to Lidarr") that resolves
+      // to "N sent to Lidarr"; cards update as each one lands.
+      if (ids.length > 1) watchJob('bulk_action')
+      // Show them as approved right away; the background job's refreshes
+      // replace this with each item's real outcome.
+      const rollbacks = ids.map((id) => optimisticallyMarkApproved(id))
+      try {
+        await bulkAction(ids, 'approve')
+      } catch (err) {
+        // Newest first: each snapshot includes the earlier optimistic marks.
+        for (const rollback of rollbacks.reverse()) rollback()
+        throw err
+      }
+      if (ids.length === 1) toast.success('Approved 1')
       setCheckedIds(new Set())
       refetch()
     } catch {

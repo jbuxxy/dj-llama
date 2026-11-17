@@ -8,6 +8,7 @@ import { activityTracker } from '@/core/jobs/activity'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
 import { realtimeBroker } from '@/core/realtime/broker'
+import { errMsg } from '@/core/validation'
 import { getOwnerUserId } from '@/db/queries/users'
 import { mergePreferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
@@ -848,7 +849,6 @@ export function recommendationRoutes(deps: AppDependencies) {
       rootFolderId: rfOverride,
     })
 
-    const results: Array<{ id: number; status: string; error?: string }> = []
     // Each item goes through the serialized Lidarr write path, so a big batch
     // takes a while -- show it moving item by item (header + live toast).
     const activity =
@@ -861,60 +861,74 @@ export function recommendationRoutes(deps: AppDependencies) {
           })
         : null
 
-    for (const id of ids) {
-      activity?.update({ current: results.length, message: undefined })
-      const rec = await deps.getRecommendation(id)
-      if (!rec) {
-        results.push({ id, status: 'not_found' })
-        continue
-      }
-      if (!isOwned(rec, userId)) {
-        results.push({ id, status: 'not_found' })
-        continue
-      }
+    const runBatch = async () => {
+      const results: Array<{ id: number; status: string; error?: string }> = []
+      for (const id of ids) {
+        const rec = await deps.getRecommendation(id)
+        if (!rec || !isOwned(rec, userId)) {
+          results.push({ id, status: 'not_found' })
+          activity?.update({ current: results.length })
+          continue
+        }
 
-      const result = await approveToTargets(
-        { mbid: rec.artist.mbid, name: rec.artist.name },
-        effectiveTargets,
-        addOptions,
-        deps.jobRecorder,
-        userId,
-        id,
-      )
-
-      const extra: Record<string, unknown> = { targetActions: result.targetActions }
-      if (result.lidarrArtistId) extra.lidarrArtistId = result.lidarrArtistId
-      if (result.lidarrError) extra.lidarrError = result.lidarrError
-      await deps.updateRecommendationStatus(id, result.status, extra)
-      results.push({ id, status: result.status })
-      activity?.update({ current: results.length, message: `Sent ${rec.artist.name}` })
-      // One notification per approved item, same as the single-approve route --
-      // a large "Approve All Above X%" batch will fan out into that many pings.
-      if (result.status === 'added_to_lidarr' || result.status === 'add_failed') {
-        void notifyRecommendationApproved(
-          rec,
-          rec.kind === 'album' ? (rec.recommendedReleaseGroupTitle ?? undefined) : undefined,
-          result.status,
+        const result = await approveToTargets(
+          { mbid: rec.artist.mbid, name: rec.artist.name },
+          effectiveTargets,
+          addOptions,
+          deps.jobRecorder,
+          userId,
+          id,
         )
+
+        const extra: Record<string, unknown> = { targetActions: result.targetActions }
+        if (result.lidarrArtistId) extra.lidarrArtistId = result.lidarrArtistId
+        if (result.lidarrError) extra.lidarrError = result.lidarrError
+        await deps.updateRecommendationStatus(id, result.status, extra)
+        results.push({ id, status: result.status })
+        activity?.update({ current: results.length, message: `Sent ${rec.artist.name}` })
+        // The Dashboard activity feed updates as each one lands, not all at the end.
+        if (userId && activity) realtimeBroker.publish(userId, { type: 'activity-updated' })
+        // One notification per approved item, same as the single-approve route --
+        // a large "Approve All Above X%" batch will fan out into that many pings.
+        if (result.status === 'added_to_lidarr' || result.status === 'add_failed') {
+          void notifyRecommendationApproved(
+            rec,
+            rec.kind === 'album' ? (rec.recommendedReleaseGroupTitle ?? undefined) : undefined,
+            result.status,
+          )
+        }
       }
+
+      if (userId && results.length > 0) {
+        realtimeBroker.publish(userId, { type: 'activity-updated' })
+      }
+      if (activity) {
+        const failed = results.filter((r) => r.status === 'add_failed').length
+        const sent = results.filter(
+          (r) => r.status !== 'not_found' && r.status !== 'add_failed',
+        ).length
+        activity.done({
+          current: undefined,
+          total: undefined,
+          resultSummary: failed > 0 ? `${sent} sent, ${failed} failed` : `${sent} sent to Lidarr`,
+          resultHref: '/discover',
+        })
+      }
+      return results
     }
 
-    if (userId && results.length > 0) {
-      realtimeBroker.publish(userId, { type: 'activity-updated' })
-    }
+    // A multi-item batch returns right away (202) and finishes in the
+    // background -- no HTTP timeout on a big "approve all", and the activity
+    // feed reports progress and refreshes the page as items land. A single
+    // approve still answers with its result, which the UI reports directly.
     if (activity) {
-      const failed = results.filter((r) => r.status === 'add_failed').length
-      const sent = results.filter(
-        (r) => r.status !== 'not_found' && r.status !== 'add_failed',
-      ).length
-      activity.done({
-        current: undefined,
-        total: undefined,
-        resultSummary: failed > 0 ? `${sent} sent, ${failed} failed` : `${sent} sent to Lidarr`,
-        resultHref: '/discover',
+      void runBatch().catch((err: unknown) => {
+        console.error('[recommendations] bulk approve failed:', err)
+        activity.fail(errMsg(err))
       })
+      return c.json({ queued: ids.length, jobId: activity.id }, 202)
     }
-    return c.json({ results })
+    return c.json({ results: await runBatch() })
   })
 
   return router

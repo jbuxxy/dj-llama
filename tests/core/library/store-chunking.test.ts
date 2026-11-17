@@ -16,6 +16,7 @@ type InsertCall = {
 type MockTx = {
   delete: ReturnType<typeof vi.fn>
   insert: ReturnType<typeof vi.fn>
+  select: ReturnType<typeof vi.fn>
 }
 
 function makeDb() {
@@ -28,7 +29,10 @@ function makeDb() {
       return []
     }),
   }))
-  const tx: MockTx = { delete: del, insert }
+  // Sync now diffs against stored rows first; an empty table means every
+  // snapshot row is an insert, which is what these chunking tests exercise.
+  const select = vi.fn(() => ({ from: () => ({ where: async () => [] }) }))
+  const tx: MockTx = { delete: del, insert, select }
   const transaction = vi.fn(async (callback: (tx: MockTx) => Promise<unknown>) => callback(tx))
 
   return {

@@ -593,4 +593,41 @@ describe.skipIf(!SHOULD_RUN)('LibrarySyncStore', () => {
       .where(eq(libraryAlbumMatchOverrides.userId, userId))
     expect(rows).toHaveLength(1)
   })
+
+  it('re-syncing only touches rows that changed and keeps per-row state', async () => {
+    const store = createLibrarySyncStore(db)
+    const a = reconciled({ sourceArtistId: 'rk-a', name: 'Artist A', matchConfidence: 0.85 })
+    const b = reconciled({ sourceArtistId: 'rk-b', name: 'Artist B' })
+    const c = reconciled({ sourceArtistId: 'rk-c', name: 'Artist C' })
+    await store.replaceLibraryArtists(userId, PLEX_SOURCE, [a, b, c])
+    const before = await db
+      .select()
+      .from(libraryArtists)
+      .where(eq(libraryArtists.source, PLEX_SOURCE))
+    const idOf = (rows: typeof before, key: string) =>
+      rows.find((r) => r.sourceArtistId === key)?.id
+    // Gap-fill's rotation cursor must survive a sync of an unchanged artist.
+    const checkedAt = new Date('2026-01-01T00:00:00Z')
+    await db
+      .update(libraryArtists)
+      .set({ lastGapCheckAt: checkedAt })
+      .where(eq(libraryArtists.id, idOf(before, 'rk-a') as number))
+
+    await store.replaceLibraryArtists(userId, PLEX_SOURCE, [
+      a,
+      { ...b, name: 'Artist B (renamed)' },
+    ])
+    const after = await db
+      .select()
+      .from(libraryArtists)
+      .where(eq(libraryArtists.source, PLEX_SOURCE))
+
+    expect(after.map((r) => r.sourceArtistId).sort()).toEqual(['rk-a', 'rk-b'])
+    expect(idOf(after, 'rk-a')).toBe(idOf(before, 'rk-a'))
+    expect(idOf(after, 'rk-b')).toBe(idOf(before, 'rk-b'))
+    expect(after.find((r) => r.sourceArtistId === 'rk-a')?.lastGapCheckAt?.toISOString()).toBe(
+      checkedAt.toISOString(),
+    )
+    expect(after.find((r) => r.sourceArtistId === 'rk-b')?.name).toBe('Artist B (renamed)')
+  })
 })

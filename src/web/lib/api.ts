@@ -914,18 +914,84 @@ export const getRequestAlbumDetail = (mbid: string) =>
   fetchApi<AlbumRequestDetail>(`/requests/album/${encodeURIComponent(mbid)}`)
 
 // Mood discovery
+export type MoodResult = {
+  artistName: string
+  reasoning: string
+  confidence: number
+  genres: string[]
+  suggestedAlbum?: string
+  coverUrl?: string
+  alreadyOwned: boolean
+}
+
+export type MoodStreamEvent =
+  | { type: 'result'; result: MoodResult }
+  | { type: 'cover'; artistName: string; coverUrl: string }
+  | { type: 'done'; count: number }
+  | { type: 'error'; error: string }
+
 export const moodDiscover = (query: string) =>
-  fetchApi<{
-    results: Array<{
-      artistName: string
-      reasoning: string
-      confidence: number
-      genres: string[]
-      suggestedAlbum?: string
-      coverUrl?: string
-      alreadyOwned: boolean
-    }>
-  }>('/mood/discover', { method: 'POST', body: JSON.stringify({ query }) })
+  fetchApi<{ results: MoodResult[] }>('/mood/discover', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+  })
+
+/**
+ * Streamed mood search: calls `onEvent` for each result as the AI writes it
+ * (then cover art as it resolves), so cards appear progressively instead of
+ * all at once after the whole response. Resolves when the stream ends.
+ */
+export async function moodDiscoverStream(
+  query: string,
+  onEvent: (event: MoodStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const res = await authedRawFetch('/mood/discover', {
+    method: 'POST',
+    body: JSON.stringify({ query }),
+    headers: { Accept: 'application/x-ndjson' },
+    signal,
+  })
+  if (!res.ok) {
+    if (res.status === 401) {
+      clearStoredToken()
+      window.dispatchEvent(new Event(AUTH_EXPIRED_EVENT))
+      throw new ApiError(res.status, { error: 'Session expired' })
+    }
+    const error = await res.json().catch(() => ({ error: res.statusText }))
+    throw new ApiError(res.status, error)
+  }
+  // Not streamed (older server, or a proxy that rewrote it): one JSON body.
+  if (!(res.headers.get('content-type') ?? '').includes('ndjson') || !res.body) {
+    const data = (await res.json()) as { results: MoodResult[] }
+    for (const result of data.results) onEvent({ type: 'result', result })
+    onEvent({ type: 'done', count: data.results.length })
+    return
+  }
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let pending = ''
+  const flush = (line: string) => {
+    if (!line.trim()) return
+    try {
+      onEvent(JSON.parse(line) as MoodStreamEvent)
+    } catch {
+      // ignore a malformed line
+    }
+  }
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    pending += decoder.decode(value, { stream: true })
+    let newline = pending.indexOf('\n')
+    while (newline !== -1) {
+      flush(pending.slice(0, newline))
+      pending = pending.slice(newline + 1)
+      newline = pending.indexOf('\n')
+    }
+  }
+  flush(pending + decoder.decode())
+}
 
 // OAuth
 export async function initiateOAuth(

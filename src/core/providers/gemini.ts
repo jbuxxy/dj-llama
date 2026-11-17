@@ -5,7 +5,9 @@ import {
   getAiRecommendationsJsonSchema,
   parseRecommendationResponse,
 } from './prompt'
+import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
+import { RecommendationStreamParser } from './stream-parse'
 import { timeoutSecondsWithDefaultToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
@@ -53,6 +55,11 @@ function sanitizeGeminiSchema(input: unknown): unknown {
   return input
 }
 
+type GeminiResponse = {
+  candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
+  usageMetadata?: { promptTokenCount?: number; candidatesTokenCount?: number }
+}
+
 export class GeminiProvider implements RecommendationProvider {
   private apiKey: string
   private model: string
@@ -65,9 +72,36 @@ export class GeminiProvider implements RecommendationProvider {
     this.timeoutMs = timeoutSecondsWithDefaultToMs(timeoutSeconds, DEFAULT_TIMEOUT_SECONDS)
   }
 
+  private requestBody(profile: TasteProfile): string {
+    return JSON.stringify({
+      contents: [{ parts: [{ text: buildRecommendationPrompt(profile) }] }],
+      generationConfig: {
+        responseMimeType: 'application/json',
+        responseSchema: sanitizeGeminiSchema(getAiRecommendationsJsonSchema()),
+        maxOutputTokens: 4096,
+        // 2.5-series models spend part of maxOutputTokens on invisible
+        // "thinking" before writing the response text, which can
+        // consume the entire budget on a long prompt (many candidate
+        // artists) and truncate the JSON before it's ever emitted.
+        // This is a plain structured-extraction task with no need for
+        // multi-step reasoning, so thinking is disabled outright.
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    })
+  }
+
+  private recordUsage(usage?: { promptTokenCount?: number; candidatesTokenCount?: number }) {
+    if (!usage) return
+    this.lastUsage = {
+      provider: 'gemini',
+      model: this.model,
+      inputTokens: usage.promptTokenCount,
+      outputTokens: usage.candidatesTokenCount,
+    }
+  }
+
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
     this.lastUsage = null
-    const prompt = buildRecommendationPrompt(profile)
 
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
@@ -80,47 +114,64 @@ export class GeminiProvider implements RecommendationProvider {
             'Content-Type': 'application/json',
             'x-goog-api-key': this.apiKey,
           },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              responseMimeType: 'application/json',
-              responseSchema: sanitizeGeminiSchema(getAiRecommendationsJsonSchema()),
-              maxOutputTokens: 4096,
-              // 2.5-series models spend part of maxOutputTokens on invisible
-              // "thinking" before writing the response text, which can
-              // consume the entire budget on a long prompt (many candidate
-              // artists) and truncate the JSON before it's ever emitted.
-              // This is a plain structured-extraction task with no need for
-              // multi-step reasoning, so thinking is disabled outright.
-              thinkingConfig: { thinkingBudget: 0 },
-            },
-          }),
+          body: this.requestBody(profile),
           signal: controller.signal,
         },
         { providerLabel: 'gemini' },
       )
 
-      const data = (await res.json()) as {
-        candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>
-        usageMetadata?: {
-          promptTokenCount?: number
-          candidatesTokenCount?: number
-        }
-      }
-      if (data.usageMetadata) {
-        this.lastUsage = {
-          provider: 'gemini',
-          model: this.model,
-          inputTokens: data.usageMetadata.promptTokenCount,
-          outputTokens: data.usageMetadata.candidatesTokenCount,
-        }
-      }
+      const data = (await res.json()) as GeminiResponse
+      this.recordUsage(data.usageMetadata)
       const text = data.candidates?.[0]?.content?.parts?.[0]?.text
       if (!text) throw new Error('Empty response from Gemini')
 
       // responseSchema does not guarantee well-formed output (truncation at
       // maxOutputTokens); the shared parser fails with a clear message instead.
       return parseRecommendationResponse(text)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async streamRecommendations(
+    profile: TasteProfile,
+    onRecommendation: (rec: AiRecommendation) => void,
+  ): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const parser = new RecommendationStreamParser(onRecommendation)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const res = await fetchWithRetry(
+        `${API_BASE}/${this.model}:streamGenerateContent?alt=sse`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': this.apiKey,
+          },
+          body: this.requestBody(profile),
+          signal: controller.signal,
+        },
+        { providerLabel: 'gemini' },
+      )
+      if (!res.body) throw new Error('Empty response from Gemini')
+      let content = ''
+      for await (const line of readLines(res.body)) {
+        if (!line.startsWith('data:')) continue
+        try {
+          const chunk = JSON.parse(line.slice(5).trim()) as GeminiResponse
+          const delta =
+            chunk.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? ''
+          content += delta
+          parser.push(delta)
+          this.recordUsage(chunk.usageMetadata)
+        } catch {
+          // partial / keep-alive frame
+        }
+      }
+      if (!content) throw new Error('Empty response from Gemini')
+      return parseRecommendationResponse(content)
     } finally {
       clearTimeout(timer)
     }

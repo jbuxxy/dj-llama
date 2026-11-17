@@ -1,7 +1,9 @@
 import type { AiRecommendation, TasteProfile } from '@/core/types'
 import { errMsg } from '@/core/validation'
 import { buildRecommendationPrompt, parseRecommendationResponse } from './prompt'
+import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
+import { RecommendationStreamParser } from './stream-parse'
 import { timeoutSecondsWithDefaultToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
@@ -76,6 +78,65 @@ export class OllamaProvider implements RecommendationProvider {
         throw new Error('Empty response from Ollama API')
       }
 
+      return parseRecommendationResponse(content)
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
+  async streamRecommendations(
+    profile: TasteProfile,
+    onRecommendation: (rec: AiRecommendation) => void,
+  ): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const prompt = buildRecommendationPrompt(profile)
+    const parser = new RecommendationStreamParser(onRecommendation)
+
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await fetchWithRetry(
+        `${this.baseUrl}/api/chat`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: this.model,
+            messages: [{ role: 'user', content: prompt }],
+            format: 'json',
+            stream: true,
+            keep_alive: '30m',
+          }),
+          signal: controller.signal,
+        },
+        { providerLabel: 'ollama' },
+      )
+      if (!response.body) throw new Error('Empty response from Ollama API')
+
+      // NDJSON: one {"message":{"content":"..."},"done":false} per token
+      // batch, then a final {"done":true,...counts}.
+      let content = ''
+      for await (const line of readLines(response.body)) {
+        let chunk: OllamaChatResponse & { done?: boolean; error?: string }
+        try {
+          chunk = JSON.parse(line)
+        } catch {
+          continue
+        }
+        if (chunk.error) throw new Error(`Ollama: ${chunk.error}`)
+        const delta = chunk.message?.content ?? ''
+        content += delta
+        parser.push(delta)
+        if (chunk.done && (chunk.prompt_eval_count != null || chunk.eval_count != null)) {
+          this.lastUsage = {
+            provider: 'ollama',
+            model: this.model,
+            inputTokens: chunk.prompt_eval_count,
+            outputTokens: chunk.eval_count,
+          }
+        }
+      }
+      if (!content) throw new Error('Empty response from Ollama API')
       return parseRecommendationResponse(content)
     } finally {
       clearTimeout(timer)

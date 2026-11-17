@@ -6,6 +6,7 @@ import {
   getAiRecommendationsJsonSchema,
   parseRecommendationResponse,
 } from './prompt'
+import { RecommendationStreamParser } from './stream-parse'
 import { DEFAULT_SDK_TIMEOUT_MS, optionalTimeoutSecondsToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
@@ -31,15 +32,13 @@ export class OpenAIProvider implements RecommendationProvider {
     this.model = model
   }
 
-  async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
-    this.lastUsage = null
+  private buildRequest(profile: TasteProfile) {
     const prompt = buildRecommendationPrompt(profile)
     const schema = getAiRecommendationsJsonSchema()
-
-    const response = await this.client.chat.completions.create({
+    return {
       model: this.model,
       response_format: {
-        type: 'json_schema',
+        type: 'json_schema' as const,
         json_schema: {
           name: 'music_recommendations',
           schema: schema as Record<string, unknown>,
@@ -49,22 +48,31 @@ export class OpenAIProvider implements RecommendationProvider {
       max_completion_tokens: 4096,
       messages: [
         {
-          role: 'system',
+          role: 'system' as const,
           content:
             'You are a music discovery expert. Respond with a JSON object matching the provided schema (a "recommendations" array).',
         },
-        { role: 'user', content: prompt },
+        { role: 'user' as const, content: prompt },
       ],
-    })
-
-    if (response.usage) {
-      this.lastUsage = {
-        provider: 'openai',
-        model: this.model,
-        inputTokens: response.usage.prompt_tokens,
-        outputTokens: response.usage.completion_tokens,
-      }
     }
+  }
+
+  private recordUsage(
+    usage: { prompt_tokens: number; completion_tokens: number } | null | undefined,
+  ) {
+    if (!usage) return
+    this.lastUsage = {
+      provider: 'openai',
+      model: this.model,
+      inputTokens: usage.prompt_tokens,
+      outputTokens: usage.completion_tokens,
+    }
+  }
+
+  async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const response = await this.client.chat.completions.create(this.buildRequest(profile))
+    this.recordUsage(response.usage)
 
     const content = response.choices[0]?.message?.content
     if (!content) {
@@ -73,6 +81,28 @@ export class OpenAIProvider implements RecommendationProvider {
 
     // strict:false means the model can still emit fenced or truncated output;
     // the shared parser extracts the array instead of crashing on bare JSON.parse.
+    return parseRecommendationResponse(content)
+  }
+
+  async streamRecommendations(
+    profile: TasteProfile,
+    onRecommendation: (rec: AiRecommendation) => void,
+  ): Promise<AiRecommendation[]> {
+    this.lastUsage = null
+    const parser = new RecommendationStreamParser(onRecommendation)
+    const stream = await this.client.chat.completions.create({
+      ...this.buildRequest(profile),
+      stream: true,
+      stream_options: { include_usage: true },
+    })
+    let content = ''
+    for await (const chunk of stream) {
+      const delta = chunk.choices[0]?.delta?.content ?? ''
+      content += delta
+      parser.push(delta)
+      if (chunk.usage) this.recordUsage(chunk.usage)
+    }
+    if (!content) throw new Error('Empty response from OpenAI API')
     return parseRecommendationResponse(content)
   }
 

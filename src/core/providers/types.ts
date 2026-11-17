@@ -16,6 +16,16 @@ export type AiUsage = {
 
 export interface RecommendationProvider {
   getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]>
+  /**
+   * Same request as getRecommendations, but streamed: `onRecommendation`
+   * fires for each recommendation as soon as the model has finished writing
+   * it. Resolves with the complete, authoritative list. Optional -- callers
+   * fall back to getRecommendations for providers without it.
+   */
+  streamRecommendations?(
+    profile: TasteProfile,
+    onRecommendation: (rec: AiRecommendation) => void,
+  ): Promise<AiRecommendation[]>
   testConnection(): Promise<{ success: boolean; message: string }>
   /**
    * Usage reported by the most recent `getRecommendations` call, or null if

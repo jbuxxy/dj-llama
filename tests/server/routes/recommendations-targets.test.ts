@@ -320,6 +320,25 @@ describe('target-aware approval', () => {
     )
   })
 
+  it('multi-item bulk approve answers 202 immediately and finishes in the background', async () => {
+    mockDeps.getRecommendation.mockImplementation(async (id: number) => ({
+      id,
+      artist: { mbid: `mbid-${id}`, name: `Artist ${id}` },
+    }))
+    mockDeps.getEnabledTargetsForUser.mockResolvedValue([])
+
+    const app = createTestApp()
+    const res = await app.request('/api/v1/recommendations/bulk', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids: [1, 2, 3], action: 'approve' }),
+    })
+
+    expect(res.status).toBe(202)
+    expect(await res.json()).toMatchObject({ queued: 3 })
+    await vi.waitFor(() => expect(mockDeps.updateRecommendationStatus).toHaveBeenCalledTimes(3))
+  })
+
   it('bulk approve without targets marks all as approved', async () => {
     mockDeps.getRecommendation.mockResolvedValue({
       id: 1,

@@ -259,4 +259,74 @@ describe('POST /api/v1/mood/discover', () => {
     const body = (await res.json()) as { results: Array<{ coverUrl?: string }> }
     expect(body.results[0]?.coverUrl).toBe('http://lidarr.local/MediaCover/2/poster.jpg')
   })
+
+  it('streams NDJSON results as the provider produces them when asked', async () => {
+    const recs = [
+      { artistName: 'Grouper', reasoning: 'r', confidence: 0.9, genres: ['ambient'] },
+      { artistName: 'Tim Hecker', reasoning: 'r', confidence: 0.8, genres: ['drone'] },
+    ]
+    const app = new Hono()
+    app.route(
+      '/',
+      moodRoutes(
+        makeDeps({
+          providerRegistry: {
+            create: vi.fn().mockResolvedValue({
+              getRecommendations: vi.fn(),
+              streamRecommendations: vi.fn(async (_p: unknown, onRec: (r: unknown) => void) => {
+                for (const r of recs) onRec(r)
+                return recs
+              }),
+              testConnection: vi.fn(),
+            }),
+          } as unknown as MoodDeps['providerRegistry'],
+        }),
+      ),
+    )
+
+    const res = await app.request('/api/v1/mood/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify({ query: 'dark ambient' }),
+    })
+    expect(res.headers.get('content-type')).toContain('application/x-ndjson')
+    const events = (await res.text())
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { type: string; result?: { artistName: string } })
+    expect(events.filter((e) => e.type === 'result').map((e) => e.result?.artistName)).toEqual([
+      'Grouper',
+      'Tim Hecker',
+    ])
+    expect(events.at(-1)).toEqual({ type: 'done', count: 2 })
+  })
+
+  it('falls back to the one-shot call when streaming fails before any result', async () => {
+    const getRecommendations = vi
+      .fn()
+      .mockResolvedValue([{ artistName: 'Eno', reasoning: 'r', confidence: 0.9, genres: [] }])
+    const app = new Hono()
+    app.route(
+      '/',
+      moodRoutes(
+        makeDeps({
+          providerRegistry: {
+            create: vi.fn().mockResolvedValue({
+              getRecommendations,
+              streamRecommendations: vi.fn().mockRejectedValue(new Error('no streaming here')),
+              testConnection: vi.fn(),
+            }),
+          } as unknown as MoodDeps['providerRegistry'],
+        }),
+      ),
+    )
+    const res = await app.request('/api/v1/mood/discover', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/x-ndjson' },
+      body: JSON.stringify({ query: 'ambient' }),
+    })
+    const text = await res.text()
+    expect(text).toContain('"artistName":"Eno"')
+    expect(getRecommendations).toHaveBeenCalledTimes(1)
+  })
 })
