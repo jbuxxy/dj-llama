@@ -7,6 +7,7 @@ import {
   type PlaylistExportFormat,
 } from '@/core/playlists/export'
 import type { GenerationResult } from '@/core/playlists/generator'
+import { strategyPolicy } from '@/core/playlists/policy'
 import type { PlaylistScheduler } from '@/core/playlists/scheduler'
 import type { SweepLiveTracksResult } from '@/core/targets/plex-playlist'
 import type { Database } from '@/db'
@@ -272,6 +273,7 @@ export function playlistRoutes(deps: PlaylistDeps) {
     if (!userId) return notAuthenticated(c)
 
     const body = c.req.valid('json')
+    const { createdStatus } = strategyPolicy(body.strategy)
     const data: PlaylistInsert = {
       name: body.name,
       userId,
@@ -282,13 +284,9 @@ export function playlistRoutes(deps: PlaylistDeps) {
       enabled: body.enabled ?? true,
       autoPushToPlex: body.autoPushToPlex,
       description: body.description,
-      // The 'active' DB default means "generated and currently live," which
-      // is wrong for a brand-new seasonal row -- tickSeasonalPlaylists reads
-      // status === 'active' as "already generated this year" and would skip
-      // it forever if a preset happens to be toggled on while already inside
-      // its window. 'pending_review' is inert here (review-expiry only acts
-      // on rows with a non-null reviewExpiresAt, which seasonal never sets).
-      ...(body.strategy === 'seasonal' ? { status: 'pending_review' } : {}),
+      // The 'active' DB default reads as "generated and live" -- see
+      // StrategyPolicy.createdStatus for the strategies that start elsewhere.
+      ...(createdStatus ? { status: createdStatus } : {}),
     }
 
     const row = await createPlaylist(db, data)
@@ -633,7 +631,7 @@ export function playlistRoutes(deps: PlaylistDeps) {
 
       const { id } = c.req.valid('param')
       const existing = await getPlaylistWithTracks(db, id)
-      if (existing?.playlist.strategy !== 'import') {
+      if (!existing || strategyPolicy(existing.playlist.strategy).generation !== 'import') {
         return notFoundProblem(
           c,
           'playlist-not-found',

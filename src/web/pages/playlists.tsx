@@ -14,6 +14,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { type StrategyPolicy, strategyPolicy } from '@/core/playlists/policy'
 import { SEASONAL_PRESETS } from '@/core/playlists/seasonal-presets'
 import { errMsg, isHttpUrl } from '@/core/validation'
 import { ArtistThumb } from '../components/artist-thumb'
@@ -338,7 +339,7 @@ function SeasonalPlaylistsSection({
 
   const seasonalByPreset = new Map(
     playlists
-      .filter((p) => p.strategy === 'seasonal' && p.config?.presetKey)
+      .filter((p) => inSection('seasonal')(p) && p.config?.presetKey)
       .map((p) => [p.config?.presetKey as string, p]),
   )
 
@@ -436,12 +437,8 @@ function SeasonalPlaylistsSection({
 }
 
 const DAILY_MIX_COUNT = 3
-const CURATED_STRATEGIES = ['weekly_digest', 'genre_focus', 'mood_mix', 'rediscover'] as const
-type CuratedStrategy = (typeof CURATED_STRATEGIES)[number]
-
-function isCuratedStrategy(strategy: string): strategy is CuratedStrategy {
-  return (CURATED_STRATEGIES as readonly string[]).includes(strategy)
-}
+const inSection = (section: StrategyPolicy['section']) => (p: { strategy: string }) =>
+  strategyPolicy(p.strategy).section === section
 
 // Per-row "how it's created" text for a curated-strategy entry -- reuses the
 // same real detail (lookback windows etc.) the old section-wide subtitle
@@ -494,9 +491,9 @@ function CuratedPlaylistsSection({
   const [provisioning, setProvisioning] = useState(false)
 
   const mixRows = playlists
-    .filter((p) => p.strategy === 'daily_mix')
+    .filter(inSection('daily-mix'))
     .sort((a, b) => (a.config?.mixIndex ?? 0) - (b.config?.mixIndex ?? 0))
-  const curatedRows = playlists.filter((p) => isCuratedStrategy(p.strategy))
+  const curatedRows = playlists.filter(inSection('curated'))
 
   // Daily Mix is always on -- if this user doesn't have their
   // DAILY_MIX_COUNT rows yet (new account, or one created before this
@@ -996,7 +993,7 @@ function ImportPlaylistSection({
   const [scheduleDraft, setScheduleDraft] = useState('0 5 * * *')
   const [showAddDialog, setShowAddDialog] = useState(false)
 
-  const importedRows = playlists.filter((p) => p.strategy === 'import')
+  const importedRows = playlists.filter(inSection('imported'))
 
   async function handleImport(data: {
     url: string
@@ -1421,13 +1418,7 @@ export function PlaylistsPage() {
   // above), and isn't an imported playlist (its own ImportPlaylistSection
   // below) -- in practice ai_prompt (Mediasage + free-text prompt) and
   // "Duplicate to Plexamp" snapshot copies.
-  const customPlaylists = playlists.filter(
-    (p) =>
-      p.strategy !== 'seasonal' &&
-      p.strategy !== 'daily_mix' &&
-      p.strategy !== 'import' &&
-      !isCuratedStrategy(p.strategy),
-  )
+  const customPlaylists = playlists.filter(inSection('custom'))
 
   return (
     <div className="p-6 space-y-6 max-w-6xl mx-auto pb-24 md:pb-6">

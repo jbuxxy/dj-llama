@@ -64,6 +64,7 @@ import { buildTrackTasteProfile } from './core/pipeline/track-taste'
 import { type ExternalTrack, importExternalPlaylistToPlex } from './core/playlists/external-import'
 import { generatePlaylist } from './core/playlists/generator'
 import { filterLibraryAlbums } from './core/playlists/library-filter'
+import { strategyPolicy } from './core/playlists/policy'
 import { tickReviewExpiry as runReviewExpiryTick } from './core/playlists/review-expiry-tick'
 import { PlaylistScheduler } from './core/playlists/scheduler'
 import { seasonalTrackKey } from './core/playlists/seasonal-generator'
@@ -550,7 +551,9 @@ async function runLibraryWebhookRefresh(): Promise<void> {
       // import doesn't block the rest.
       for (const user of users) {
         const userPlaylists = await getPlaylistsByUser(db, user.id)
-        const imports = userPlaylists.filter((p) => p.strategy === 'import' && p.enabled)
+        const imports = userPlaylists.filter(
+          (p) => strategyPolicy(p.strategy).generation === 'import' && p.enabled,
+        )
         const withMissing = await getPlaylistIdsWithMissingTracks(
           db,
           imports.map((p) => p.id),
@@ -2049,10 +2052,11 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
           ref: String(playlist.id),
           label: playlist.name,
         }))
+  const policy = strategyPolicy(playlist.strategy)
   activity?.update({
     status: 'running',
     queuePosition: undefined,
-    message: playlist.strategy === 'import' ? 'Importing tracks...' : 'Picking tracks...',
+    message: policy.runningMessage,
   })
 
   try {
@@ -2062,7 +2066,7 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
       metadata: { playlistName: playlist.name, strategy: playlist.strategy },
     })
 
-    if (playlist.strategy === 'import') {
+    if (policy.generation === 'import') {
       await executePlaylistImport(playlist, jobId)
       return
     }
@@ -2073,10 +2077,10 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
       size: 25,
       trackSourcePriority: ['local', 'spotify', 'deezer'] as const,
     }
-    // Daily Mix must never contain a track the user doesn't own -- enforced
-    // here regardless of what's stored on the row, not just by convention.
-    const trackSourcePriority: ('local' | 'spotify' | 'deezer')[] =
-      playlist.strategy === 'daily_mix' ? ['local'] : cfg.trackSourcePriority
+    // Enforced here regardless of what's stored on the row, not just by convention.
+    const trackSourcePriority: ('local' | 'spotify' | 'deezer')[] = policy.ownedTracksOnly
+      ? ['local']
+      : cfg.trackSourcePriority
     const generation = await generatePlaylist(
       playlist.strategy as import('./db/schema').PlaylistStrategy,
       {
@@ -2098,18 +2102,13 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
       resolverDeps,
     )
 
-    // Only strategies the user never names get a generated title: Mediasage
-    // (a fully random phrase, e.g. "Golden Hour Groove - Jul 2026") and Daily
-    // Mix (fixed "Daily Mix N" prefix plus a genre-aware subtitle). Curated
-    // playlists keep the name the user gave them. The previous title is
-    // captured below for Plex cleanup. Only Mediasage gets a description.
+    // Generated titles replace the name (see policy.titling); the previous
+    // title is captured for Plex cleanup.
     const preRenameName = playlist.name
-    const usesEvocativeTitle =
-      playlist.strategy === 'ai_prompt' || playlist.strategy === 'daily_mix'
-    if (usesEvocativeTitle && generation.mixTitle) {
+    if (generation.mixTitle) {
       playlist.name = generation.mixTitle
     }
-    if (playlist.strategy === 'ai_prompt') {
+    if (policy.describes) {
       playlist.description = generation.mixDescription ?? null
     }
 
@@ -2131,36 +2130,22 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
       })
     }
 
-    // Four distinct lifecycles (see plan Phase 4, plus daily_mix): ai_prompt
-    // is fully exempt from auto-add and always waits for an explicit
-    // Push/Reject decision with no expiry; seasonal follows the master
-    // seasonal toggle (its own tick owns teardown, so it never uses the
-    // review-expiry mechanism); every other strategy (daily_mix,
-    // weekly_digest, genre_focus, mood_mix, rediscover) always auto-pushes
-    // and replaces the previous Plex playlist in place the moment it
-    // regenerates -- ai_prompt is the only one that stops for a manual
-    // accept/reject decision, since it's the only strategy the user hasn't
-    // already implicitly approved by creating/scheduling it.
+    // Push and review rules come from the strategy policy (core/playlists/policy.ts).
     const settings = await getSettings(db)
     const prefs = mergePreferences(settings?.preferences)
 
     const autoPush =
-      playlist.strategy === 'ai_prompt'
-        ? false
-        : playlist.strategy === 'seasonal'
-          ? prefs.seasonalPlaylistsEnabled === true && isSeasonalPlaylistInWindow(playlist)
-          : true
+      policy.autoPush === 'always' ||
+      (policy.autoPush === 'seasonal-window' &&
+        prefs.seasonalPlaylistsEnabled === true &&
+        isSeasonalPlaylistInWindow(playlist))
 
     const { pushed, itemsAdded } = autoPush
       ? await pushPlaylistTracksToPlex(playlist, generation.tracks, preRenameName)
       : { pushed: false, itemsAdded: 0 }
 
     const reviewWindowDays = prefs.reviewWindowDays ?? 14
-    const usesReviewExpiry =
-      !pushed &&
-      playlist.strategy !== 'ai_prompt' &&
-      playlist.strategy !== 'seasonal' &&
-      playlist.strategy !== 'daily_mix'
+    const usesReviewExpiry = !pushed && policy.reviewExpires
 
     // Once pushed, trackCount reflects what Plex actually added, not the
     // pre-push candidate list -- otherwise a partial/failed match silently
@@ -2332,7 +2317,7 @@ async function restartPlaylistScheduler(): Promise<void> {
   const playlists = await getEnabledPlaylists(db)
   for (const playlist of playlists) {
     if (!playlist.schedule) continue
-    if (playlist.strategy === 'ai_prompt' && !aiConfigured) continue
+    if (strategyPolicy(playlist.strategy).requiresAi && !aiConfigured) continue
 
     playlistScheduler.schedule(`playlist-${playlist.id}`, playlist.schedule, async () => {
       await executePlaylistGeneration(playlist.id)

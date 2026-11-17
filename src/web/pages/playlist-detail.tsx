@@ -3,6 +3,7 @@ import { Download, Pencil } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
+import { strategyPolicy } from '@/core/playlists/policy'
 import { Hint } from '../components/hint'
 import { GenerateButton, SweepLiveTracksButton } from '../components/playlist-row-actions'
 import { Skeleton } from '../components/ui/skeleton'
@@ -179,7 +180,7 @@ export function PlaylistDetailPage() {
     enabled: !Number.isNaN(numId),
   })
 
-  const isImport = data?.playlist.strategy === 'import'
+  const isImport = !!data && strategyPolicy(data.playlist.strategy).generation === 'import'
   // Same key as the Playlists page's missing-tracks list, so both stay in
   // sync and refresh on the same 'playlists' invalidation.
   const { data: missingTracks } = useQuery({

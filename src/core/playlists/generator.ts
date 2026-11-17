@@ -5,6 +5,7 @@ import {
   generateMixTitle,
   pickDominantGenre,
 } from './mix-title'
+import { STRATEGY_POLICIES } from './policy'
 import { shuffled } from './random'
 import {
   generateSeasonalTracks,
@@ -28,7 +29,7 @@ export type GenerationResult = {
   tracks: ResolvedTrack[]
   artistCount: number
   strategy: string
-  // Evocative generated title, ai_prompt (Mediasage) and daily_mix only --
+  // Generated title for strategies whose policy.titling isn't 'user' --
   // e.g. "Golden Hour Groove - Jul 2026" for Mediasage, "Daily Mix 1: Golden
   // Hour Indie Rock" for Daily Mix -- instead of a name the user typed.
   mixTitle?: string
@@ -146,10 +147,11 @@ export async function generatePlaylist(
 
   const seasonalPreset = strategy === 'seasonal' ? getSeasonalPreset(config.presetKey) : undefined
 
+  const policy = STRATEGY_POLICIES[strategy]
   const resolverConfig: TrackResolverConfig = {
     tracksPerArtist: 3,
     sourcePriority: config.trackSourcePriority,
-    excludeTitleKeywords: strategy === 'daily_mix' ? HOLIDAY_TITLE_KEYWORDS : undefined,
+    excludeTitleKeywords: policy.excludesHolidayTracks ? HOLIDAY_TITLE_KEYWORDS : undefined,
     // No per-track genre data exists (see TrackResolverConfig), so a
     // mainstream artist's one seasonal single/cover is only findable by
     // title text -- being selected as one of the playlist's artists only
@@ -179,25 +181,17 @@ export async function generatePlaylist(
     }))
   }
 
-  const isMediasage = strategy === 'ai_prompt'
-  const isDailyMix = strategy === 'daily_mix'
-
   return {
     tracks,
     artistCount: artists.length,
     strategy,
-    // Only the strategies the user never names get a generated title:
-    // Mediasage (ai_prompt) gets a fully evocative one, and Daily Mix keeps
-    // its fixed "Daily Mix N" identity paired with a genre-aware subtitle
-    // drawn from this bucket's actual artists (e.g. "Daily Mix 1: Golden
-    // Hour Indie Rock"). Curated playlists (Weekly Digest, Genre Focus, Mood
-    // Mix, Rediscover) are named by the user and keep that name.
-    mixTitle: isMediasage
-      ? generateMixTitle()
-      : isDailyMix
-        ? generateDailyMixTitle(config.mixIndex ?? 0, pickDominantGenre(artists))
-        : undefined,
-    mixDescription: isMediasage
+    mixTitle:
+      policy.titling === 'evocative'
+        ? generateMixTitle()
+        : policy.titling === 'daily-mix'
+          ? generateDailyMixTitle(config.mixIndex ?? 0, pickDominantGenre(artists))
+          : undefined,
+    mixDescription: policy.describes
       ? generateMixDescription({ genres: config.genreFilters, decades: config.decadeFilters })
       : undefined,
   }
