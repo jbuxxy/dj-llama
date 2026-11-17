@@ -23,6 +23,7 @@ import {
   recommendations,
 } from '@/db/schema'
 import { createAlbumBlock } from './album-blocks'
+import { notifyUsers } from './change-events'
 
 type RecommendationRow = typeof recommendations.$inferSelect
 type ArtistRow = typeof artists.$inferSelect
@@ -193,10 +194,15 @@ export async function updateRecommendationStatus(
   status: string,
   extra: StatusUpdateExtra = {},
 ): Promise<void> {
-  await db
+  const rows = await db
     .update(recommendations)
     .set({ status, actedOnAt: new Date(), ...extra })
     .where(eq(recommendations.id, id))
+    .returning({ userId: recommendations.userId })
+  notifyUsers(
+    rows.map((r) => r.userId),
+    { type: 'activity-updated' },
+  )
 }
 
 export type RejectRecommendationParams = {
@@ -219,7 +225,8 @@ export async function rejectRecommendation(
   db: Database,
   params: RejectRecommendationParams,
 ): Promise<number | null> {
-  return db.transaction(async (tx) => {
+  let ownerId: number | null = null
+  const artistId = await db.transaction(async (tx) => {
     const conditions = [eq(recommendations.id, params.recommendationId)]
     if (params.userId !== undefined) {
       conditions.push(eq(recommendations.userId, params.userId))
@@ -237,8 +244,10 @@ export async function rejectRecommendation(
         artistId: recommendations.artistId,
         kind: recommendations.kind,
         releaseGroupMbid: recommendations.recommendedReleaseGroupId,
+        userId: recommendations.userId,
       })
     if (!rec) return null
+    ownerId = rec.userId
 
     if (params.permanent && params.userId !== undefined) {
       // Album recs without a release group (e.g. legacy rows) can't be
@@ -275,14 +284,22 @@ export async function rejectRecommendation(
     }
     return rec.artistId
   })
+  // After commit, so a tab that refetches immediately sees the new state.
+  notifyUsers([ownerId], { type: 'activity-updated' })
+  return artistId
 }
 
 export async function bulkUpdateStatus(db: Database, ids: number[], status: string): Promise<void> {
   if (ids.length === 0) return
-  await db
+  const rows = await db
     .update(recommendations)
     .set({ status, actedOnAt: new Date() })
     .where(inArray(recommendations.id, ids))
+    .returning({ userId: recommendations.userId })
+  notifyUsers(
+    rows.map((r) => r.userId),
+    { type: 'activity-updated' },
+  )
 }
 
 /**
@@ -296,7 +313,11 @@ export async function bulkDelete(db: Database, ids: number[]): Promise<number> {
   const deleted = await db
     .delete(recommendations)
     .where(inArray(recommendations.id, ids))
-    .returning({ id: recommendations.id })
+    .returning({ userId: recommendations.userId })
+  notifyUsers(
+    deleted.map((r) => r.userId),
+    { type: 'activity-updated' },
+  )
   return deleted.length
 }
 

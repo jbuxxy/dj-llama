@@ -665,7 +665,6 @@ export function requestRoutes(deps: AppDependencies) {
       (requester.isAdmin || requester.isOwner || requester.autoApproveRequests === true)
     if (!autoDispatches) {
       void notifyRequestEvent(deps, 'request_pending_approval', created, requester.username)
-      realtimeBroker.publish(auth.userId, { type: 'request-updated', requestId: created.id })
       return c.json(created, 201)
     }
 
@@ -676,7 +675,6 @@ export function requestRoutes(deps: AppDependencies) {
       targetActions,
     })
     void notifyRequestEvent(deps, 'request_auto_approved', created, requester.username, status)
-    realtimeBroker.publish(auth.userId, { type: 'request-updated', requestId: created.id })
     return c.json({ ...created, status, targetActions }, 201)
   })
 
@@ -703,7 +701,7 @@ export function requestRoutes(deps: AppDependencies) {
   // separate "show dismissed" view to bring it back (see schema.ts's
   // dismissedAt comment). Owner-only, no admin override -- unlike
   // retry/approve/reject this isn't a workflow transition another party
-  // needs to see, so no realtimeBroker publish either.
+  // needs to see (dismissRequest only refreshes the owner's other tabs).
   router.post('/api/v1/requests/:id/dismiss', zParam(requestIdParamSchema), async (c) => {
     const auth = requireUser(c)
     if (!auth.ok) return auth.response
@@ -777,19 +775,10 @@ export function requestRoutes(deps: AppDependencies) {
     if (staleIds.length === 0) return c.json(items)
 
     for (const id of staleIds) {
-      const applied = await resolvePendingRequest(deps.db, id, {
+      await resolvePendingRequest(deps.db, id, {
         status: 'rejected',
         rejectionReason: 'Already in your library',
       })
-      if (applied) {
-        const item = items.find((r) => r.id === id)
-        if (item) {
-          realtimeBroker.publish(item.requestedByUserId, {
-            type: 'request-updated',
-            requestId: id,
-          })
-        }
-      }
     }
 
     return c.json(items.filter((r) => !staleIds.includes(r.id)))
@@ -819,7 +808,6 @@ export function requestRoutes(deps: AppDependencies) {
     if (!applied) {
       return apiError(c, 409, 'Request was already decided')
     }
-    realtimeBroker.publish(request.requestedByUserId, { type: 'request-updated', requestId: id })
     return c.json({ ...request, status, targetActions, decidedByUserId: auth.userId })
   })
 
@@ -847,7 +835,6 @@ export function requestRoutes(deps: AppDependencies) {
       if (!applied) {
         return apiError(c, 409, 'Request was already decided')
       }
-      realtimeBroker.publish(request.requestedByUserId, { type: 'request-updated', requestId: id })
       return c.json({
         ...request,
         status: 'rejected',
@@ -885,7 +872,6 @@ export function requestRoutes(deps: AppDependencies) {
             targetActions,
           })
           if (status === 'dispatched') dispatched++
-          realtimeBroker.publish(userId, { type: 'request-updated', requestId: request.id })
         } catch (err) {
           console.error(`[requests] retry-failed: request ${request.id} errored:`, errMsg(err))
         }
@@ -945,7 +931,6 @@ export function requestRoutes(deps: AppDependencies) {
       decidedByUserId: auth.userId,
       targetActions,
     })
-    realtimeBroker.publish(request.requestedByUserId, { type: 'request-updated', requestId: id })
     return c.json({ ...request, status, targetActions, decidedByUserId: auth.userId })
   })
 

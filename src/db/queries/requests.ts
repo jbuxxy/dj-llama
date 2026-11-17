@@ -2,6 +2,7 @@ import { and, count, desc, eq, isNotNull, isNull, or } from 'drizzle-orm'
 import type { RequestHistoryEntry } from '@/core/pipeline/track-taste'
 import type { Database } from '@/db'
 import { requests, users } from '@/db/schema'
+import { notifyUsers } from './change-events'
 
 type RequestRow = typeof requests.$inferSelect
 
@@ -22,6 +23,7 @@ export type CreateRequestInput = {
 export async function createRequest(db: Database, data: CreateRequestInput): Promise<RequestRow> {
   const [row] = await db.insert(requests).values(data).returning()
   if (!row) throw new Error('createRequest: no row returned')
+  notifyUsers([row.requestedByUserId], { type: 'request-updated', requestId: row.id })
   return row
 }
 
@@ -132,6 +134,7 @@ export async function dismissRequest(db: Database, id: number, userId: number): 
     .set({ dismissedAt: new Date() })
     .where(and(eq(requests.id, id), eq(requests.requestedByUserId, userId)))
     .returning({ id: requests.id })
+  if (result.length > 0) notifyUsers([userId], { type: 'request-updated', requestId: id })
   return result.length > 0
 }
 
@@ -161,6 +164,8 @@ export async function dismissAllRequests(
       ),
     )
     .returning({ id: requests.id })
+  const first = result[0]
+  if (first) notifyUsers([userId], { type: 'request-updated', requestId: first.id })
   return result.length
 }
 
@@ -234,7 +239,7 @@ export async function resolveRequest(
     targetActions?: Record<string, unknown>
   },
 ): Promise<void> {
-  await db
+  const rows = await db
     .update(requests)
     .set({
       status: data.status,
@@ -244,6 +249,8 @@ export async function resolveRequest(
       decidedAt: new Date(),
     })
     .where(eq(requests.id, id))
+    .returning({ requestedByUserId: requests.requestedByUserId })
+  notifyRequestChange(id, rows, data.decidedByUserId)
 }
 
 /** Only transitions rows still 'pending' -- a stale double-click on an already-decided request is a no-op. */
@@ -267,6 +274,20 @@ export async function resolvePendingRequest(
       decidedAt: new Date(),
     })
     .where(and(eq(requests.id, id), eq(requests.status, 'pending')))
-    .returning({ id: requests.id })
+    .returning({ requestedByUserId: requests.requestedByUserId })
+  notifyRequestChange(id, result, data.decidedByUserId)
   return result.length > 0
+}
+
+/** The requester's "My Requests" and the deciding admin's queue both change. */
+function notifyRequestChange(
+  requestId: number,
+  rows: Array<{ requestedByUserId: number }>,
+  decidedByUserId: number | undefined,
+): void {
+  if (rows.length === 0) return
+  notifyUsers([...rows.map((r) => r.requestedByUserId), decidedByUserId], {
+    type: 'request-updated',
+    requestId,
+  })
 }

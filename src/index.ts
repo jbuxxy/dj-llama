@@ -1428,8 +1428,6 @@ async function autoRequestMissingPlaylistTracks(
       })
       requestedCount++
       anyChanged = true
-      realtimeBroker.publish(ownerId, { type: 'request-updated', requestId: requestRow.id })
-      if (anySuccess) realtimeBroker.publish(ownerId, { type: 'activity-updated' })
     } catch (err) {
       console.error(
         `[playlist-import] Auto-request failed for '${artistName} - ${albumTitle}':`,

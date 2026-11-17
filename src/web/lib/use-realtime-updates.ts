@@ -130,6 +130,8 @@ export function useRealtimeUpdates(): void {
         case 'request-updated':
           queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
           queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
+          // Auto-dispatched requests show up in the Dashboard activity feed too.
+          queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
           break
         case 'recommendation-confirmed':
           queryClient.invalidateQueries({ queryKey: ['recommendations'] })

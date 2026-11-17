@@ -3,7 +3,6 @@ import { envConfig } from '@/config/env'
 import { decryptChannelSecrets, safeCompare } from '@/core/crypto'
 import { activityTracker } from '@/core/jobs/activity'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
-import { realtimeBroker } from '@/core/realtime/broker'
 import {
   deriveDispatchStatus,
   dispatchToTargets,
@@ -355,7 +354,6 @@ export function recommendationRoutes(deps: AppDependencies) {
         if (result.lidarrError) extra.lidarrError = result.lidarrError
 
         await deps.updateRecommendationStatus(id, finalStatus, extra)
-        if (userId) realtimeBroker.publish(userId, { type: 'activity-updated' })
         if (finalStatus === 'added_to_lidarr' || finalStatus === 'add_failed') {
           void notifyRecommendationApproved(
             rec,
@@ -397,12 +395,10 @@ export function recommendationRoutes(deps: AppDependencies) {
           reasonText: validated.data.reasonText ?? null,
           permanent: validated.data.permanent,
         })
-        if (userId) realtimeBroker.publish(userId, { type: 'activity-updated' })
         return c.json({ status: 'rejected' })
       }
 
       await deps.updateRecommendationStatus(id, status)
-      if (userId) realtimeBroker.publish(userId, { type: 'activity-updated' })
       return c.json({ status })
     },
   )
@@ -432,10 +428,7 @@ export function recommendationRoutes(deps: AppDependencies) {
       // Fast path: no shared reason/permanent => a single bulk status update,
       // preserving the prior reason-less behaviour.
       if (!reason && !permanent) {
-        if (ownedIds.length > 0) {
-          await deps.bulkUpdateStatus(ownedIds, 'rejected')
-          if (userId) realtimeBroker.publish(userId, { type: 'activity-updated' })
-        }
+        if (ownedIds.length > 0) await deps.bulkUpdateStatus(ownedIds, 'rejected')
         return c.json({ updated: ownedIds.length })
       }
       // Shared-reason path: route each id through rejectRecommendation so the
@@ -448,9 +441,6 @@ export function recommendationRoutes(deps: AppDependencies) {
           reasonText: null,
           permanent,
         })
-      }
-      if (userId && ownedIds.length > 0) {
-        realtimeBroker.publish(userId, { type: 'activity-updated' })
       }
       return c.json({ updated: ownedIds.length })
     }
@@ -506,8 +496,6 @@ export function recommendationRoutes(deps: AppDependencies) {
         await deps.updateRecommendationStatus(id, result.status, extra)
         results.push({ id, status: result.status })
         activity?.update({ current: results.length, message: `Sent ${rec.artist.name}` })
-        // The Dashboard activity feed updates as each one lands, not all at the end.
-        if (userId && activity) realtimeBroker.publish(userId, { type: 'activity-updated' })
         // One notification per approved item, same as the single-approve route --
         // a large "Approve All Above X%" batch will fan out into that many pings.
         if (result.status === 'added_to_lidarr' || result.status === 'add_failed') {
@@ -519,9 +507,6 @@ export function recommendationRoutes(deps: AppDependencies) {
         }
       }
 
-      if (userId && results.length > 0) {
-        realtimeBroker.publish(userId, { type: 'activity-updated' })
-      }
       if (activity) {
         const failed = results.filter((r) => r.status === 'add_failed').length
         const sent = results.filter(
