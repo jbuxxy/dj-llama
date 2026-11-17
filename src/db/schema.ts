@@ -208,28 +208,38 @@ export type TopTracksCache = {
   cachedAt: string
 }
 
-export const artists = pgTable('artists', {
-  id: serial('id').primaryKey(),
-  mbid: uuid('mbid').unique().notNull(),
-  name: text('name').notNull(),
-  disambiguation: text('disambiguation'),
-  tags: text('tags').array(),
-  genres: text('genres').array(),
-  imageUrl: text('image_url'),
-  logoUrl: text('logo_url'),
-  streamingUrls: jsonb('streaming_urls').$type<Record<string, string>>(),
-  imageFailedAt: timestamp('image_failed_at', { withTimezone: true }),
-  cachedAt: timestamp('cached_at', { withTimezone: true }),
-  genresCachedAt: timestamp('genres_cached_at', { withTimezone: true }),
-  beginYear: integer('begin_year'),
-  endYear: integer('end_year'),
-  topTracks: jsonb('top_tracks').$type<TopTracksCache>(),
-  description: jsonb('description').$type<Record<string, string> | null>(),
-  externalLinks: jsonb('external_links').$type<Record<string, string> | null>(),
-  wikidataId: text('wikidata_id'),
-  wikidataFetchedAt: timestamp('wikidata_fetched_at', { withTimezone: true }),
-  wikidataFailedAt: timestamp('wikidata_failed_at', { withTimezone: true }),
-})
+export const artists = pgTable(
+  'artists',
+  {
+    id: serial('id').primaryKey(),
+    mbid: uuid('mbid').unique().notNull(),
+    name: text('name').notNull(),
+    disambiguation: text('disambiguation'),
+    tags: text('tags').array(),
+    genres: text('genres').array(),
+    imageUrl: text('image_url'),
+    logoUrl: text('logo_url'),
+    streamingUrls: jsonb('streaming_urls').$type<Record<string, string>>(),
+    imageFailedAt: timestamp('image_failed_at', { withTimezone: true }),
+    cachedAt: timestamp('cached_at', { withTimezone: true }),
+    genresCachedAt: timestamp('genres_cached_at', { withTimezone: true }),
+    beginYear: integer('begin_year'),
+    endYear: integer('end_year'),
+    topTracks: jsonb('top_tracks').$type<TopTracksCache>(),
+    description: jsonb('description').$type<Record<string, string> | null>(),
+    externalLinks: jsonb('external_links').$type<Record<string, string> | null>(),
+    wikidataId: text('wikidata_id'),
+    wikidataFetchedAt: timestamp('wikidata_fetched_at', { withTimezone: true }),
+    wikidataFailedAt: timestamp('wikidata_failed_at', { withTimezone: true }),
+  },
+  (table) => ({
+    // getArtistGenresByNames matches on lower(name)
+    nameLowerIdx: index('artists_name_lower_idx').on(sql`lower(${table.name})`),
+    // Created by migration 0029; declared here so schema and DB agree.
+    genresGinIdx: index('artists_genres_gin_idx').using('gin', table.genres),
+    tagsGinIdx: index('artists_tags_gin_idx').using('gin', table.tags),
+  }),
+)
 
 export const artistGenreAliases = pgTable(
   'artist_genre_aliases',
@@ -319,6 +329,8 @@ export const recommendations = pgTable(
       table.status,
       table.actedOnAt,
     ),
+    // Admin activity feed: WHERE acted_on_at IS NOT NULL ORDER BY acted_on_at DESC
+    actedOnIdx: index('recommendations_acted_on_idx').on(table.actedOnAt),
   }),
 )
 
@@ -406,6 +418,9 @@ export const jobRuns = pgTable(
       .on(table.subscriptionId)
       .where(sql`${table.subscriptionId} IS NOT NULL`),
     typeStartedAtIdx: index('job_runs_type_started_at_idx').on(table.type, table.startedAt),
+    // listJobs with no type filter orders by started_at; jobHealth by completed_at
+    startedAtIdx: index('job_runs_started_at_idx').on(table.startedAt),
+    completedAtIdx: index('job_runs_completed_at_idx').on(table.completedAt),
   }),
 )
 
@@ -816,6 +831,13 @@ export const libraryArtists = pgTable(
     ),
     dedupIdx: index('library_artists_dedup_idx').on(table.userId, table.mbid),
     nameIdx: index('library_artists_name_idx').on(table.userId, table.nameNormalized),
+    // Lidarr rows are shared (user_id null) and looked up by mbid / joined by
+    // source artist id without a user filter.
+    sourceMbidIdx: index('library_artists_source_mbid_idx').on(table.source, table.mbid),
+    sourceArtistIdx: index('library_artists_source_artist_idx').on(
+      table.source,
+      table.sourceArtistId,
+    ),
   }),
 )
 
@@ -844,6 +866,13 @@ export const libraryAlbums = pgTable(
       table.sourceAlbumId,
     ),
     artistLookup: index('library_albums_artist_idx').on(table.userId, table.artistMbid),
+    // Owned-album checks filter by album/artist mbid across users.
+    albumMbidIdx: index('library_albums_album_mbid_idx').on(table.albumMbid),
+    artistMbidIdx: index('library_albums_artist_mbid_idx').on(table.artistMbid),
+    sourceArtistIdx: index('library_albums_source_artist_idx').on(
+      table.source,
+      table.sourceArtistId,
+    ),
   }),
 )
 

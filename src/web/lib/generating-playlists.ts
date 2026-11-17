@@ -1,4 +1,4 @@
-import { type QueryClient, useQuery } from '@tanstack/react-query'
+import { type QueryClient, useQuery, useQueryClient } from '@tanstack/react-query'
 
 const KEY = ['generating-playlist-ids'] as const
 
@@ -17,9 +17,11 @@ const SAFETY_TIMEOUT_MS = 3 * 60_000
 // same way the rest of this app already treats React Query as its client
 // state layer.
 export function useGeneratingPlaylistIds(): ReadonlySet<number> {
+  const queryClient = useQueryClient()
   const { data } = useQuery<number[]>({
     queryKey: KEY,
-    queryFn: () => [],
+    // Client-only state -- a blanket invalidateQueries() must not reset it.
+    queryFn: () => queryClient.getQueryData<number[]>(KEY) ?? [],
     initialData: [],
     staleTime: Number.POSITIVE_INFINITY,
   })

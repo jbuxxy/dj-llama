@@ -1,3 +1,4 @@
+import { activityTracker } from '@/core/jobs/activity'
 import type { PipelineOrchestrator } from '@/core/pipeline/orchestrator'
 import type { RealtimeEvent } from '@/core/realtime/broker'
 import { realtimeBroker } from '@/core/realtime/broker'
@@ -128,6 +129,9 @@ export function createRealtimeSSEStream(userId: number): ReadableStream {
           cleanup()
         }
       })
+      // Catch-up for a (re)connecting tab: whatever is running or just
+      // finished for this user right now.
+      emit({ type: 'activity-snapshot', jobs: activityTracker.list(userId) })
 
       heartbeat = setInterval(() => {
         try {

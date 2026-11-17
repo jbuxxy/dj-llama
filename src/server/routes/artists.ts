@@ -1,5 +1,6 @@
 import { eq } from 'drizzle-orm'
 import { Hono } from 'hono'
+import { TtlCache } from '@/core/cache/ttl-cache'
 import { createDeezerClient } from '@/core/clients/deezer'
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
 import { getAlbumTracksRankedByPopularity } from '@/core/clients/spotify'
@@ -15,6 +16,23 @@ const ENRICHMENT_NEG_TTL_MS = 24 * 60 * 60 * 1000
 
 export function artistRoutes(deps: AppDependencies) {
   const router = new Hono()
+  const releaseGroupCache = new TtlCache<Awaited<ReturnType<typeof mb.getReleaseGroups>>>(
+    6 * 60 * 60 * 1000,
+    1000,
+  )
+  // Deezer artist search results (including "no unambiguous match") per artist
+  // row, so revisiting a card doesn't repeat the search. Bounded so a long-lived
+  // process doesn't grow without limit.
+  const DEEZER_ID_CACHE_MAX = 5000
+  const deezerIdByArtist = new Map<number, number | null>()
+  function rememberDeezerId(artistId: number, deezerId: number | null): void {
+    if (deezerIdByArtist.size >= DEEZER_ID_CACHE_MAX) {
+      const oldest = deezerIdByArtist.keys().next().value
+      if (oldest !== undefined) deezerIdByArtist.delete(oldest)
+    }
+    deezerIdByArtist.set(artistId, deezerId)
+  }
+
   const deezer = createDeezerClient()
   const mb = createMusicBrainzClient()
   const wikidata = createWikidataClient()
@@ -62,9 +80,16 @@ export function artistRoutes(deps: AppDependencies) {
       // Search multiple results and require an unambiguous exact name match.
       // If Deezer has 2+ artists with the same name, skip and fall through
       // to MusicBrainz recordings (MBID-based, always correct).
-      const results = await deezer.searchArtists(artist.name, 10)
-      const exactMatches = results.filter((r) => r.name.toLowerCase() === artist.name.toLowerCase())
-      if (exactMatches.length === 1 && exactMatches[0]) deezerId = exactMatches[0].id
+      if (deezerIdByArtist.has(id)) {
+        deezerId = deezerIdByArtist.get(id) ?? null
+      } else {
+        const results = await deezer.searchArtists(artist.name, 10)
+        const exactMatches = results.filter(
+          (r) => r.name.toLowerCase() === artist.name.toLowerCase(),
+        )
+        if (exactMatches.length === 1 && exactMatches[0]) deezerId = exactMatches[0].id
+        rememberDeezerId(id, deezerId)
+      }
     }
 
     // Always fetch fresh from Deezer (preview URLs are signed and expire)
@@ -93,9 +118,20 @@ export function artistRoutes(deps: AppDependencies) {
     }
 
     // Cache track names/durations (preview URLs are not cached - fetched fresh each time)
+    // Only write when the list actually changed -- this endpoint fires for
+    // every card on Discover, and rewriting an identical JSON blob each time
+    // is pure write load.
     const toCache = tracks.map((t) => ({ name: t.name, durationMs: t.durationMs }))
-    const topTracksCache: TopTracksCache = { tracks: toCache, cachedAt: new Date().toISOString() }
-    await deps.db.update(artists).set({ topTracks: topTracksCache }).where(eq(artists.id, id))
+    const previous = (artist.topTracks as TopTracksCache | null)?.tracks ?? []
+    const unchanged =
+      previous.length === toCache.length &&
+      previous.every(
+        (t, i) => t.name === toCache[i]?.name && t.durationMs === toCache[i]?.durationMs,
+      )
+    if (!unchanged && toCache.length > 0) {
+      const topTracksCache: TopTracksCache = { tracks: toCache, cachedAt: new Date().toISOString() }
+      await deps.db.update(artists).set({ topTracks: topTracksCache }).where(eq(artists.id, id))
+    }
 
     return c.json({ tracks })
   })
@@ -230,7 +266,11 @@ export function artistRoutes(deps: AppDependencies) {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mbid)) {
       return c.json({ error: 'Invalid MBID format' }, 400)
     }
-    const releaseGroups = await mb.getReleaseGroups(mbid)
+    // An artist's discography barely changes; one live MusicBrainz call
+    // (~1 req/s, shared with scans) per artist per 6h is plenty.
+    const releaseGroups = await releaseGroupCache.get(mbid.toLowerCase(), () =>
+      mb.getReleaseGroups(mbid),
+    )
     return c.json(releaseGroups)
   })
 

@@ -4,6 +4,7 @@ import { recordPlexScrobble } from '@/db/queries/plex-scrobbles'
 import { getUserByPlexAccountId } from '@/db/queries/users'
 import type { AppDependencies } from '@/server'
 import type { HonoEnv } from '@/server/types'
+import { clearListeningCache } from './listening'
 
 // Plex's webhook payload -- POSTed as multipart/form-data with a `payload`
 // field containing this JSON (plus an optional `thumb` image part we ignore).
@@ -81,6 +82,7 @@ export function webhookRoutes(deps: AppDependencies) {
         trackName,
         playedAt: new Date(),
       })
+      clearListeningCache(user.id)
       realtimeBroker.publish(user.id, { type: 'listening-updated' })
       return c.body(null, 200)
     } catch (err) {

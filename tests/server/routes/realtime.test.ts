@@ -48,12 +48,16 @@ describe('GET /api/v1/realtime/events', () => {
     const reader = res.body?.getReader()
     if (!reader) throw new Error('missing body reader')
     await readFrame(reader) // retry frame
+    // Every (re)connect starts with this user's activity snapshot.
+    const snapshot = await readFrame(reader)
+    expect(snapshot).toContain('id: 1')
+    expect(snapshot).toContain(JSON.stringify({ type: 'activity-snapshot', jobs: [] }))
 
     realtimeBroker.publish(99, { type: 'library-updated' }) // different user - must not appear
     realtimeBroker.publish(42, { type: 'library-updated' })
 
     const frame = await readFrame(reader)
-    expect(frame).toContain('id: 1')
+    expect(frame).toContain('id: 2')
     expect(frame).toContain(JSON.stringify({ type: 'library-updated' }))
 
     await reader.cancel()

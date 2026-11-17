@@ -1,10 +1,12 @@
 import { Hono } from 'hono'
+import { TtlCache } from '@/core/cache/ttl-cache'
 import { createPlexClient } from '@/core/clients/plex'
 import { normalizeArtistName } from '@/core/library/normalize'
 import type { LibrarySyncStore } from '@/core/library/store'
 import { createArtistImageClients } from '@/core/pipeline/image-clients'
 import { fetchArtistImage } from '@/core/pipeline/resolve'
 import type { StoreDb } from '@/core/pipeline/store'
+import { realtimeBroker } from '@/core/realtime/broker'
 import type { Database } from '@/db'
 import { getArtistImageCacheByMbids, upsertArtist } from '@/db/queries/artists'
 import type { SettingsRow } from '@/db/queries/settings'
@@ -82,23 +84,27 @@ async function enrichImages(
   // and also gives the Lidarr fallback below a real MBID to look up by
   // instead of a fuzzy name match.
   if (deps.userId != null) {
+    const userId = deps.userId
     const mbidByArtist = new Map<string, string>()
-    const checked = new Set<string>()
+    const toResolve = new Set<string>()
     for (const entry of entries) {
-      if (entry.mbid) {
-        mbidByArtist.set(entry.artist, entry.mbid)
-        continue
-      }
-      if (checked.has(entry.artist)) continue
-      checked.add(entry.artist)
-      const nameNormalized = normalizeArtistName(entry.artist)
-      if (!nameNormalized) continue
-      const matches = await deps.librarySyncStore.findReconciledByNormalizedName(
-        deps.userId,
-        nameNormalized,
-      )
-      if (matches[0]) mbidByArtist.set(entry.artist, matches[0].mbid)
+      if (entry.mbid) mbidByArtist.set(entry.artist, entry.mbid)
+      else toResolve.add(entry.artist)
     }
+    // Independent lookups -- run them together instead of one round-trip
+    // per artist in sequence.
+    await Promise.all(
+      [...toResolve].map(async (artist) => {
+        if (mbidByArtist.has(artist)) return
+        const nameNormalized = normalizeArtistName(artist)
+        if (!nameNormalized) return
+        const matches = await deps.librarySyncStore.findReconciledByNormalizedName(
+          userId,
+          nameNormalized,
+        )
+        if (matches[0]) mbidByArtist.set(artist, matches[0].mbid)
+      }),
+    )
     for (const entry of entries) {
       if (!entry.mbid && mbidByArtist.has(entry.artist)) {
         entry.mbid = mbidByArtist.get(entry.artist)
@@ -119,15 +125,33 @@ async function enrichImages(
     }
   }
 
-  if (!entries.some((e) => !e.imageUrl)) return
+  const missing = entries.filter((e) => !e.imageUrl && e.mbid)
+  if (missing.length === 0) return
 
   // Live fallback for artists the scheduled backfill job (see
-  // core/pipeline/artist-image-backfill.ts) hasn't reached yet -- same
-  // AudioDB -> Lidarr -> fanart.tv -> musicinfo.pro chain the rest of the app
-  // uses, via fetchArtistImage. Unlike the old Lidarr-only version, every
-  // outcome (hit or cacheable miss) is written back to the shared artists
-  // cache, so a given artist only ever triggers one live lookup total, not
-  // one per page load.
+  // core/pipeline/artist-image-backfill.ts) hasn't reached yet. Deliberately
+  // NOT awaited: the AudioDB -> Lidarr -> fanart.tv chain can take seconds
+  // per artist, and the dashboard shouldn't wait on it. Results land in the
+  // shared artists cache and a listening-updated push makes open tabs
+  // refetch and pick the new images up.
+  void backfillListeningImages(missing, deps).catch((err) =>
+    console.warn('[listening] background image backfill failed:', err),
+  )
+}
+
+// Artists with a live lookup already running, so the two dashboard panels
+// (and rapid re-renders) don't start duplicate fetches for the same artist.
+const imageLookupsInFlight = new Set<string>()
+
+async function backfillListeningImages(
+  entries: Array<{ artist: string; mbid?: string }>,
+  deps: {
+    db: Database
+    userId: number | undefined
+    settings: SettingsRow
+    tryConsumeRateLimit: StoreDb['tryConsumeRateLimit']
+  },
+): Promise<void> {
   const preferences = mergePreferences(deps.settings.preferences)
   const { audiodbClient, lidarrClient, fanartClient, musicinfoClient } = createArtistImageClients({
     settings: deps.settings,
@@ -136,18 +160,14 @@ async function enrichImages(
   })
   if (!audiodbClient && !lidarrClient && !fanartClient && !musicinfoClient) return
 
-  const seen = new Set<string>()
-  const imageCache = new Map<string, string>()
-
+  let found = 0
   for (const entry of entries) {
-    // No reconciled MBID yet -- fetchArtistImage's providers are all
-    // MBID-keyed, so there's nothing useful to look up until the next
-    // library sync reconciles this artist.
-    if (entry.imageUrl || !entry.mbid || seen.has(entry.artist)) continue
-    seen.add(entry.artist)
+    const mbid = entry.mbid
+    if (!mbid || imageLookupsInFlight.has(mbid)) continue
+    imageLookupsInFlight.add(mbid)
     try {
       const image = await fetchArtistImage(
-        entry.mbid,
+        mbid,
         entry.artist,
         audiodbClient,
         lidarrClient,
@@ -155,26 +175,47 @@ async function enrichImages(
         musicinfoClient,
       )
       if (image.url) {
-        imageCache.set(entry.artist, image.url)
+        found++
         await upsertArtist(deps.db, {
-          mbid: entry.mbid,
+          mbid,
           name: entry.artist,
           imageUrl: image.url,
           logoUrl: image.logoUrl,
         })
       } else if (image.failed) {
-        await upsertArtist(deps.db, { mbid: entry.mbid, name: entry.artist, imageFailed: true })
+        await upsertArtist(deps.db, { mbid, name: entry.artist, imageFailed: true })
       }
     } catch (err) {
       console.warn(`[listening] image lookup failed for ${entry.artist}:`, err)
+    } finally {
+      imageLookupsInFlight.delete(mbid)
     }
   }
+  if (found > 0 && deps.userId != null) {
+    realtimeBroker.publish(deps.userId, { type: 'listening-updated' })
+  }
+}
 
-  for (const entry of entries) {
-    if (!entry.imageUrl && imageCache.has(entry.artist)) {
-      entry.imageUrl = imageCache.get(entry.artist)
-    }
-  }
+// Windowed Plex history ("this year" can be 25 sequential pages of 200) is
+// shared by both dashboard panels and every page of each -- fetch it once per
+// user+range for a couple of minutes instead of on every request. A Plex
+// scrobble webhook clears it (see clearListeningCache) so new plays show up.
+type RecentPlays = Awaited<
+  ReturnType<ReturnType<typeof createPlexClient>['getRecentlyPlayedSince']>
+>
+const recentPlaysCache = new TtlCache<RecentPlays>(2 * 60 * 1000, 200)
+
+function cachedRecentlyPlayed(
+  userId: number | undefined,
+  days: number,
+  load: () => Promise<RecentPlays>,
+): Promise<RecentPlays> {
+  if (userId == null) return load()
+  return recentPlaysCache.get(`${userId}:${days}`, load)
+}
+
+export function clearListeningCache(userId: number): void {
+  for (const days of [7, 30, 365]) recentPlaysCache.delete(`${userId}:${days}`)
 }
 
 export function listeningRoutes(deps: AppDependencies) {
@@ -236,7 +277,9 @@ export function listeningRoutes(deps: AppDependencies) {
           }))
         } else {
           const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-          const recent = await client.getRecentlyPlayedSince(cutoff)
+          const recent = await cachedRecentlyPlayed(userId, days, () =>
+            client.getRecentlyPlayedSince(cutoff),
+          )
           const counts = new Map<string, number>()
           for (const t of recent) {
             if (t.viewedAt < cutoff) continue
@@ -325,7 +368,9 @@ export function listeningRoutes(deps: AppDependencies) {
           // Windowed range: same cutoff-paginated fetch top-artists uses,
           // then paginate the (already newest-first) in-memory result.
           const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
-          const windowed = await client.getRecentlyPlayedSince(cutoff)
+          const windowed = (
+            await cachedRecentlyPlayed(userId, days, () => client.getRecentlyPlayedSince(cutoff))
+          ).filter((t) => t.viewedAt >= cutoff)
           total = windowed.length
           tracks = windowed.slice(offset, offset + limit).map((t) => ({
             artist: t.artistName,

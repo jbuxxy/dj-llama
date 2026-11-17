@@ -1,4 +1,6 @@
+import { AsyncLocalStorage } from 'node:async_hooks'
 import PQueue from 'p-queue'
+import { TtlCache } from '@/core/cache/ttl-cache'
 import { VERSION } from '@/version'
 
 const BASE_URL = 'https://musicbrainz.org/ws/2'
@@ -151,6 +153,29 @@ function sleep(ms: number): Promise<void> {
 // safety margin below the limit rather than riding exactly on it.
 const sharedQueue = new PQueue({ concurrency: 1, interval: 1150, intervalCap: 1 })
 
+// Priority lanes on that one queue. A person waiting on a click (track
+// search, album details, a request dispatch) must not sit behind the 150-250
+// lookups a background scan or library sync has already queued -- at ~1 req/s
+// that used to mean minutes. Same rate limit overall; interactive requests
+// just go to the front of the line.
+const INTERACTIVE_PRIORITY = 10
+const BACKGROUND_PRIORITY = 0
+const interactiveContext = new AsyncLocalStorage<boolean>()
+
+/** Run `fn` with its MusicBrainz calls in the interactive (front-of-queue) lane. */
+export function runInteractive<T>(fn: () => T): T {
+  return interactiveContext.run(true, fn)
+}
+
+/** Run `fn` in the background lane even if called from an interactive context. */
+export function runInBackgroundLane<T>(fn: () => T): T {
+  return interactiveContext.run(false, fn)
+}
+
+function currentPriority(): number {
+  return interactiveContext.getStore() ? INTERACTIVE_PRIORITY : BACKGROUND_PRIORITY
+}
+
 /**
  * Requests currently queued or in flight on the shared rate gate above. A
  * caller doing bulk MB-bound work (library sync, gap-fill) can surface this
@@ -186,7 +211,9 @@ export function createMusicBrainzClient() {
     let lastErr: unknown
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
       try {
-        const res = (await queue.add(() => fetchOnce(path))) as Response
+        const res = (await queue.add(() => fetchOnce(path), {
+          priority: currentPriority(),
+        })) as Response
 
         if (res.ok) {
           return (await res.json()) as T
@@ -238,9 +265,17 @@ export function createMusicBrainzClient() {
     throw lastErr instanceof Error ? lastErr : new Error(`MusicBrainz request failed for ${path}`)
   }
 
+  // A scan resolves many tracks by the same artist (similar tracks, AI picks,
+  // gap-fill) and used to look each artist up again every time -- a full
+  // ~1.15s rate-limited slot apiece. Memoize per client instance (a scan
+  // creates its own client, so that's a per-run memo); long-lived route
+  // clients get a TTL so artist data doesn't go stale. Failures aren't kept.
+  const artistMemo = new TtlCache<MBArtist>(6 * 60 * 60 * 1000, 2000)
   function lookupArtist(mbid: string): Promise<MBArtist> {
-    const params = new URLSearchParams({ inc: 'tags+url-rels', fmt: 'json' })
-    return request<MBArtist>(`/artist/${mbid}?${params}`)
+    return artistMemo.get(mbid, () => {
+      const params = new URLSearchParams({ inc: 'tags+url-rels', fmt: 'json' })
+      return request<MBArtist>(`/artist/${mbid}?${params}`)
+    })
   }
 
   function searchArtist(query: string): Promise<MBSearchResult> {

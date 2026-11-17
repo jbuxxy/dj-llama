@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { useActivity } from '../lib/activity'
 import { getPipelineStatus } from '../lib/api'
-import { useSSE } from '../lib/hooks'
 
 type SSEProgress = {
   stage: string
@@ -9,6 +9,9 @@ type SSEProgress = {
   total?: number
   message?: string
 }
+
+// A finished scan's card lingers this long so "Done!" is actually seen.
+const DONE_LINGER_MS = 60_000
 
 const STAGES = ['collect', 'analyze', 'discover', 'resolve', 'score', 'filter', 'store', 'complete']
 
@@ -65,7 +68,32 @@ export function PipelineProgress({
     queryKey: ['pipelineStatus'],
     queryFn: getPipelineStatus,
   })
-  const { data: sseData } = useSSE('/api/v1/pipeline/events')
+  // This user's scan only (the activity feed is per-user), fed by the shared
+  // realtime connection -- no second EventSource just for this card.
+  const activity = useActivity()
+  const job = activity.find((j) => j.kind === 'pipeline')
+  const sseData: SSEProgress | null = (() => {
+    if (!job) return null
+    if (job.status === 'done') {
+      const age = Date.now() - Date.parse(job.finishedAt ?? job.updatedAt)
+      return age < DONE_LINGER_MS ? { stage: 'complete', message: job.message } : null
+    }
+    if (job.status === 'error') return null
+    if (job.status === 'queued') {
+      return {
+        stage: 'collect',
+        message: job.queuePosition
+          ? `Queued - #${job.queuePosition} in line, starts when the current scan finishes`
+          : job.message,
+      }
+    }
+    return {
+      stage: job.stage ?? 'collect',
+      current: job.current,
+      total: job.total,
+      message: job.message,
+    }
+  })()
   const completeFired = useRef(false)
 
   const [elapsed, setElapsed] = useState(0)
@@ -75,7 +103,8 @@ export function PipelineProgress({
   const lastEventRef = useRef<number>(Date.now())
   const [stalled, setStalled] = useState(false)
 
-  const progress = sseData as SSEProgress | null
+  const progress = sseData
+  const progressStamp = job?.updatedAt
   const isRunning = status?.running ?? false
 
   const stage = progress?.stage ?? (status?.running ? (status.stage ?? 'collect') : null)
@@ -98,18 +127,24 @@ export function PipelineProgress({
       : Math.round(((stageIdx + stageFraction) / STAGES.length) * 100)
     : 0
 
-  // Start timer on first SSE event
+  const hasProgress = progress !== null
+  const jobStartedAt = job?.startedAt
+  // Start timer on first event, counting from when the server started the job
   useEffect(() => {
-    if (progress && !startedRef.current) {
+    if (hasProgress && !startedRef.current) {
       startedRef.current = true
-      setElapsed(0)
+      const startMs = jobStartedAt ? Date.parse(jobStartedAt) : Date.now()
+      setElapsed(Math.max(0, Math.round((Date.now() - startMs) / 1000)))
       timerRef.current = setInterval(() => setElapsed((e) => e + 1), 1000)
     }
-    if (progress) {
+  }, [hasProgress, jobStartedAt])
+
+  useEffect(() => {
+    if (progressStamp) {
       lastEventRef.current = Date.now()
       setStalled(false)
     }
-  }, [progress])
+  }, [progressStamp])
 
   useEffect(() => {
     if (!stage || stage === 'complete') return
@@ -132,12 +167,12 @@ export function PipelineProgress({
   }, [stage])
 
   useEffect(() => {
-    if (!isRunning && !progress) {
+    if (!isRunning && !hasProgress) {
       startedRef.current = false
       setElapsed(0)
       setStalled(false)
     }
-  }, [isRunning, progress])
+  }, [isRunning, hasProgress])
 
   // Fire onComplete exactly once when pipeline finishes
   useEffect(() => {

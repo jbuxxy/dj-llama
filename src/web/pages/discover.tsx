@@ -1,4 +1,4 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   CheckSquare,
   Download,
@@ -11,7 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { RejectionReason } from '@/core/recommendations/rejection-reasons'
-import { errMsg } from '@/core/validation'
+import { JobProgressBar } from '../components/activity-center'
 import { AlbumApprove } from '../components/album-approve'
 import { AlbumPicker } from '../components/album-picker'
 import { CardStack } from '../components/card-stack'
@@ -28,6 +28,7 @@ import { useClickOutside } from '../hooks/use-click-outside'
 import { useKeyboardShortcuts } from '../hooks/use-keyboard-shortcuts'
 import { usePopularAlbumsAvailability } from '../hooks/use-popular-albums-availability'
 import { usePullToRefresh } from '../hooks/use-pull-to-refresh'
+import { useActiveJob, watchJob } from '../lib/activity'
 import {
   ApiError,
   approveRecommendation,
@@ -40,11 +41,11 @@ import {
   getWarmStatuses,
   listTargets,
   rescanArtists,
-  triggerPipeline,
   updateRecommendation,
 } from '../lib/api'
 import { reportApprovalOutcome } from '../lib/approval'
 import { usePreviewContext } from '../lib/preview-context'
+import { useStartScan } from '../lib/use-start-scan'
 
 type FilterTab = 'all' | 'pending' | 'approved' | 'rejected'
 type ViewMode = 'grid' | 'list' | 'stack'
@@ -110,7 +111,26 @@ function SkeletonGrid() {
 }
 
 function EmptyState({ filter }: { filter: FilterTab }) {
+  const scan = useStartScan()
+  const scanJob = useActiveJob('pipeline')
   if (filter === 'all') {
+    if (scan.running) {
+      // A scan is filling this page right now -- show it working instead of
+      // an empty "run a scan" prompt. Results appear when it lands (the
+      // realtime job event refreshes the list).
+      return (
+        <div className="py-16 max-w-sm mx-auto text-center space-y-3">
+          <p className="text-text text-sm font-medium">Finding new music for you...</p>
+          <p className="text-muted text-xs min-h-4">
+            {scanJob?.status === 'queued' && scanJob.queuePosition
+              ? `Queued - #${scanJob.queuePosition} in line`
+              : (scanJob?.message ?? 'Scan in progress')}
+          </p>
+          {scanJob && <JobProgressBar job={scanJob} />}
+          <p className="text-micro text-muted">Picks will show up here as soon as it finishes.</p>
+        </div>
+      )
+    }
     return (
       <div className="py-16 text-center space-y-3">
         <p className="text-muted text-sm">
@@ -119,25 +139,7 @@ function EmptyState({ filter }: { filter: FilterTab }) {
         <div className="flex items-center justify-center gap-3">
           <button
             type="button"
-            onClick={() =>
-              triggerPipeline()
-                .then((res) =>
-                  toast.success(
-                    res.status === 'duplicate'
-                      ? 'Scan already running'
-                      : res.queued
-                        ? `Scan queued (position ${res.position ?? 0}) - it will start when the current run finishes`
-                        : 'Scan started - check Dashboard for progress',
-                  ),
-                )
-                .catch((err) => {
-                  const msg =
-                    typeof err === 'object' && err !== null && 'message' in err
-                      ? String(err.message)
-                      : String(err)
-                  toast.error(msg)
-                })
-            }
+            onClick={scan.start}
             className="px-3 py-1.5 text-sm bg-accent text-accent-fg rounded-md hover:opacity-90 transition-opacity"
           >
             Run a scan
@@ -539,6 +541,7 @@ function MoreMenu({
 }
 
 export function DiscoverPage() {
+  const scan = useStartScan()
   const queryClient = useQueryClient()
   const preview = usePreviewContext()
   const popularAvailable = usePopularAlbumsAvailability()
@@ -631,6 +634,9 @@ export function DiscoverPage() {
   const { data, isLoading: loading } = useQuery({
     queryKey: ['recommendations', { filter, page, decades: [...activeDecades].sort().join(',') }],
     queryFn: () => getRecommendations(queryParams),
+    // Keep the current cards on screen while the next page/tab loads instead
+    // of flashing back to skeletons on every click.
+    placeholderData: keepPreviousData,
   })
 
   const items = (data?.items ?? []) as Recommendation[]
@@ -651,7 +657,9 @@ export function DiscoverPage() {
     queryKey: ['warm-status', mbids],
     queryFn: () => getWarmStatuses(mbids),
     enabled: !!mbids,
-    refetchInterval: 5000,
+    // Only keep polling while something is actually warming up.
+    refetchInterval: (query) =>
+      Object.values(query.state.data?.statuses ?? {}).some((st) => st === 'warming') ? 5000 : false,
     staleTime: 2000,
   })
 
@@ -987,8 +995,12 @@ export function DiscoverPage() {
     if (checkedIds.size === 0) return
     setBulkActing(true)
     try {
+      // Live per-item progress toast ("Sending 3/12 to Lidarr").
+      if (checkedIds.size > 1) watchJob('bulk_action')
       await bulkAction([...checkedIds], 'approve')
-      toast.success(`Approved ${checkedIds.size}`)
+      // Multi-item batches already got a live progress toast that resolves
+      // to "N sent to Lidarr"; don't stack a second one on top.
+      if (checkedIds.size === 1) toast.success('Approved 1')
       setCheckedIds(new Set())
       refetch()
     } catch {
@@ -1566,23 +1578,10 @@ export function DiscoverPage() {
       {!bulkMode && (
         <button
           type="button"
-          onClick={() =>
-            triggerPipeline()
-              .then((res) =>
-                toast.success(
-                  res.status === 'duplicate'
-                    ? 'Scan already running'
-                    : res.queued
-                      ? `Scan queued (position ${res.position ?? 0}) - it will start when the current run finishes`
-                      : 'Scan started - check Dashboard for progress',
-                ),
-              )
-              .catch((err) => {
-                toast.error(errMsg(err))
-              })
-          }
-          aria-label="Run Scan"
-          className="md:hidden fixed bottom-20 right-4 z-30 w-12 h-12 rounded-full bg-accent text-accent-fg shadow-lg flex items-center justify-center hover:opacity-90 transition-opacity"
+          onClick={scan.start}
+          disabled={scan.running}
+          aria-label={scan.running ? 'Scanning...' : 'Run Scan'}
+          className={`md:hidden fixed bottom-20 right-4 z-30 w-12 h-12 rounded-full bg-accent text-accent-fg shadow-lg flex items-center justify-center hover:opacity-90 transition-opacity disabled:opacity-70${scan.running ? ' animate-pulse' : ''}`}
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"

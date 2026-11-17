@@ -1,8 +1,9 @@
 import { Hono } from 'hono'
 import { envConfig } from '@/config/env'
 import { createLastFmClient } from '@/core/clients/lastfm'
-import { createLidarrClient } from '@/core/clients/lidarr'
+import { getSharedLidarrClient } from '@/core/clients/lidarr'
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
+import { activityTracker } from '@/core/jobs/activity'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
 import { artistPicksToTracks } from '@/core/pipeline/discover-tracks'
 import { filter } from '@/core/pipeline/filter'
@@ -125,6 +126,17 @@ export function pipelineRoutes(deps: AppDependencies) {
       ? await deps.getUserById(quickDiscoverUserId)
       : null
 
+    // Visible progress for the fire-and-forget run below (header activity
+    // indicator + live toast), and the signal the client uses to refresh
+    // Discover when it lands instead of guessing with timers.
+    const activity = quickDiscoverUserId
+      ? activityTracker.start(quickDiscoverUserId, {
+          kind: 'quick_discover',
+          label: `More like ${trimmedArtistName}`,
+          message: `Adding ${trimmedArtistName}${suggestedAlbum ? ` - ${suggestedAlbum}` : ''}...`,
+        })
+      : null
+
     // Fire-and-forget a focused pipeline run with just this artist as seed
     ;(async () => {
       const jobRecorder = deps.jobRecorder
@@ -145,7 +157,7 @@ export function pipelineRoutes(deps: AppDependencies) {
         const lidarrApiKey = settings.lidarrApiKey as string | null
         const lidarr =
           lidarrUrl && lidarrApiKey
-            ? createLidarrClient(
+            ? getSharedLidarrClient(
                 lidarrUrl,
                 lidarrApiKey,
                 (settings.skipTlsVerify as boolean) ?? false,
@@ -222,6 +234,7 @@ export function pipelineRoutes(deps: AppDependencies) {
 
         // Find similar artists via AI
         const discovered: DiscoveredArtist[] = []
+        activity?.update({ message: `Asking the AI for artists like ${trimmedArtistName}...` })
 
         // Get AI recommendations focused on this artist
         let aiUsage: unknown = null
@@ -264,6 +277,10 @@ export function pipelineRoutes(deps: AppDependencies) {
               },
             })
           }
+          activity?.done({
+            resultSummary: `Added ${trimmedArtistName} to Discover`,
+            resultHref: '/discover',
+          })
           return
         }
 
@@ -284,8 +301,21 @@ export function pipelineRoutes(deps: AppDependencies) {
           discovered,
           lastfm ? (name, mbid) => lastfm.getTopTracks(name, mbid, 3) : null,
         )
+        let looked = 0
+        activity?.update({
+          message: `Finding albums for ${tracks.length} picks on MusicBrainz...`,
+          current: 0,
+          total: tracks.length,
+        })
         const resolved = (
-          await Promise.all(tracks.map((t) => resolveTrackToAlbum(t, mb, undefined, lidarr)))
+          await Promise.all(
+            tracks.map((t) =>
+              resolveTrackToAlbum(t, mb, undefined, lidarr).finally(() => {
+                looked++
+                activity?.update({ current: looked, total: tracks.length })
+              }),
+            ),
+          )
         ).filter((a): a is NonNullable<typeof a> => a !== null)
         const rejectedMbids = await deps.storeDb.getRejectedMbids(prefs.rejectionCooldownDays)
         const blockedMbids = quickDiscoverUserId
@@ -310,6 +340,15 @@ export function pipelineRoutes(deps: AppDependencies) {
         if (filtered.length > 0) {
           await store(filtered, deps.storeDb, { userId: quickDiscoverUserId })
         }
+        activity?.done({
+          resultSummary:
+            filtered.length > 0
+              ? `Added ${trimmedArtistName} + ${filtered.length} similar pick${filtered.length === 1 ? '' : 's'}`
+              : `Added ${trimmedArtistName}; no new similar picks`,
+          resultHref: '/discover',
+          current: undefined,
+          total: undefined,
+        })
 
         if (jobId != null && jobRecorder) {
           await jobRecorder.complete(jobId, {
@@ -322,6 +361,7 @@ export function pipelineRoutes(deps: AppDependencies) {
           })
         }
       } catch (err: unknown) {
+        activity?.fail(errMsg(err))
         if (jobId != null && jobRecorder) {
           await recordFailureSafely(jobRecorder, jobId, errMsg(err))
         }
@@ -393,8 +433,19 @@ export function pipelineRoutes(deps: AppDependencies) {
       let attempted = 0
       let updated = 0
       let failed = 0
+      const activity =
+        userId && artistsToUpdate.size > 0
+          ? activityTracker.start(userId, {
+              kind: 'artist_rescan',
+              label: 'Refreshing artist images',
+              current: 0,
+              total: artistsToUpdate.size,
+              message: `Looking up ${artistsToUpdate.size} artist${artistsToUpdate.size === 1 ? '' : 's'}...`,
+            })
+          : null
       for (const [mbid, artist] of artistsToUpdate) {
         attempted++
+        activity?.update({ current: attempted, message: `Looking up ${artist.name as string}` })
         const name = artist.name as string
         const [imageOutcome, metadataOutcome] = await Promise.allSettled([
           fetchArtistImage(mbid, name, audiodb, lidarr, fanart, musicinfo),
@@ -441,6 +492,11 @@ export function pipelineRoutes(deps: AppDependencies) {
         }
       }
 
+      activity?.done({
+        resultSummary: `Updated ${updated} of ${attempted} artist${attempted === 1 ? '' : 's'}`,
+        current: undefined,
+        total: undefined,
+      })
       return c.json({ attempted, updated, failed, total: attempted })
     } finally {
       rescanRunning = false

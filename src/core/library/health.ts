@@ -90,6 +90,8 @@ export class LibraryHealthService {
   }
 
   async runChecks(): Promise<HealthCheckResult[]> {
+    // A health scan means the user wants fresh numbers; drop memoized stats.
+    this.statsCache = null
     const [lidarrArtists, cachedArtists] = await Promise.all([
       this.deps.lidarrClient.getArtists(),
       this.deps.artistCache.getAll(),
@@ -156,7 +158,23 @@ export class LibraryHealthService {
     return progress
   }
 
+  // getStats pulls Lidarr's entire artist list (tens of MB / ~30s on a big
+  // library) -- memoize briefly so revisiting Library Health is instant.
+  private statsCache: { at: number; value: Promise<LibraryStats> } | null = null
+  private static readonly STATS_TTL_MS = 5 * 60 * 1000
+
   async getStats(): Promise<LibraryStats> {
+    const hit = this.statsCache
+    if (hit && Date.now() - hit.at < LibraryHealthService.STATS_TTL_MS) return hit.value
+    const value = this.loadStats()
+    this.statsCache = { at: Date.now(), value }
+    value.catch(() => {
+      if (this.statsCache?.value === value) this.statsCache = null
+    })
+    return value
+  }
+
+  private async loadStats(): Promise<LibraryStats> {
     const [lidarrArtists, rootFolders] = await Promise.all([
       this.deps.lidarrClient.getArtists(),
       this.deps.lidarrClient.getRootFolders(),

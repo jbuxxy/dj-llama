@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { activityTracker } from '@/core/jobs/activity'
 import { notAuthenticated } from '@/server/helpers/auth-problems'
 import { createRealtimeSSEStream } from '@/server/sse'
 import type { HonoEnv } from '@/server/types'
@@ -25,6 +26,14 @@ export function realtimeRoutes() {
         Connection: 'keep-alive',
       },
     })
+  })
+
+  // Same snapshot the stream sends on connect, for clients that want it
+  // without opening an EventSource (and for tests).
+  router.get('/api/v1/activity', (c) => {
+    const userId = c.get('userId')
+    if (!userId) return notAuthenticated(c)
+    return c.json({ jobs: activityTracker.list(userId) })
   })
 
   return router

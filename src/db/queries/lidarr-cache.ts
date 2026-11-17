@@ -1,4 +1,4 @@
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 import type { Database } from '@/db'
 import { libraryAlbums, libraryArtists } from '@/db/schema'
 
@@ -41,4 +41,39 @@ export async function getCachedLidarrIds(
     artistId: artistId != null && Number.isFinite(artistId) ? artistId : null,
     albumId: albumId != null && Number.isFinite(albumId) ? albumId : null,
   }
+}
+
+/**
+ * Normalized album titles per normalized artist name, from the synced Lidarr
+ * library snapshot. Replaces a live `GET /api/v1/artist` (tens of MB and
+ * ~30s on a large library) plus one `GET /album?artistId` per artist for
+ * "do I already own this?" checks.
+ */
+export async function getLidarrAlbumTitlesByArtist(
+  db: Database,
+  artistNamesNormalized: string[],
+): Promise<Map<string, Set<string>>> {
+  const result = new Map<string, Set<string>>()
+  const names = [...new Set(artistNamesNormalized.filter(Boolean))]
+  if (names.length === 0) return result
+  const rows = await db
+    .select({ artist: libraryArtists.nameNormalized, title: libraryAlbums.titleNormalized })
+    .from(libraryArtists)
+    .innerJoin(
+      libraryAlbums,
+      and(
+        eq(libraryAlbums.source, libraryArtists.source),
+        eq(libraryAlbums.sourceArtistId, libraryArtists.sourceArtistId),
+      ),
+    )
+    .where(and(eq(libraryArtists.source, 'lidarr'), inArray(libraryArtists.nameNormalized, names)))
+  for (const row of rows) {
+    let titles = result.get(row.artist)
+    if (!titles) {
+      titles = new Set()
+      result.set(row.artist, titles)
+    }
+    titles.add(row.title)
+  }
+  return result
 }

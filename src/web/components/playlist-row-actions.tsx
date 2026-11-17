@@ -2,6 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { Check, Copy, Play, Radio, Trash2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { watchJob } from '../lib/activity'
 import {
   deletePlaylistApi,
   duplicatePlaylistApi,
@@ -50,9 +51,11 @@ export function GenerateButton({
 
   async function handleGenerate() {
     markPlaylistGenerating(queryClient, playlistId)
+    // Progress (queued -> picking tracks -> N tracks ready) arrives as a live
+    // toast via the activity feed; no "started" toast needed here.
+    watchJob('playlist', String(playlistId))
     try {
       await generateFn(playlistId)
-      toast.success('Playlist generation started')
       onGenerated()
     } catch {
       clearPlaylistGenerating(queryClient, playlistId)

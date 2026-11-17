@@ -6,7 +6,7 @@ import {
   getAiRecommendationsJsonSchema,
   parseRecommendationResponse,
 } from './prompt'
-import { optionalTimeoutSecondsToMs } from './timeout'
+import { DEFAULT_SDK_TIMEOUT_MS, optionalTimeoutSecondsToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const DEFAULT_MODEL = 'gpt-5.4-mini'
@@ -26,7 +26,7 @@ export class OpenAIProvider implements RecommendationProvider {
     this.client = new OpenAI({
       apiKey,
       ...(baseUrl ? { baseURL: baseUrl } : {}),
-      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      timeout: timeoutMs ?? DEFAULT_SDK_TIMEOUT_MS,
     })
     this.model = model
   }

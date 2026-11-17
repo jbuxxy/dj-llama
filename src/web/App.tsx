@@ -18,15 +18,17 @@ import {
 } from 'lucide-react'
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
-import { Toaster, toast } from 'sonner'
-import { errMsg } from '@/core/validation'
+import { Toaster } from 'sonner'
 import { CHANNEL, GIT_SHA, VERSION } from '@/version'
+import { ActivityCenter } from './components/activity-center'
+import { AppSplash } from './components/app-splash'
 import { AuthGate } from './components/auth-gate'
 import { BottomNav } from './components/bottom-nav'
 import { ErrorBoundary } from './components/error-boundary'
 import { KeyboardShortcuts } from './components/keyboard-shortcuts'
 import { PreviewPlayer } from './components/preview-player'
 import { SongIdentifyDialog } from './components/song-identify-dialog'
+import { Skeleton } from './components/ui/skeleton'
 import { useAuditionQueue } from './hooks/use-audition-queue'
 import { useClickOutside } from './hooks/use-click-outside'
 import { useInstallPrompt } from './hooks/use-install-prompt'
@@ -37,45 +39,86 @@ import {
   clearStoredToken,
   getAuthStatus,
   getCurrentUser,
-  getPipelineStatus,
   getSetupStatus,
   listPendingRequests,
   logoutUser,
-  triggerPipeline,
 } from './lib/api'
 import { PreviewContext } from './lib/preview-context'
 import { queryClient } from './lib/query-client'
 import { applyTheme, getStoredMode, type Mode, setStoredMode } from './lib/theme'
 import { useRealtimeUpdates } from './lib/use-realtime-updates'
+import { useStartScan } from './lib/use-start-scan'
 // Eager: dashboard is the default landing surface and setup gates the entire app
 import { Dashboard } from './pages/dashboard'
 import { SetupWizard } from './pages/setup'
 
-// Lazy: secondary routes split into per-page bundles to shrink first paint
+// Lazy: secondary routes split into per-page bundles to shrink first paint.
+// The loaders are kept in one table so the shell can warm them all once the
+// browser is idle -- the first tap on a tab then renders instantly instead of
+// waiting on a chunk download.
+const routeChunks = {
+  artist: () => import('./pages/artist-discography'),
+  album: () => import('./pages/album-details'),
+  discover: () => import('./pages/discover'),
+  playlistDetail: () => import('./pages/playlist-detail'),
+  playlists: () => import('./pages/playlists'),
+  requests: () => import('./pages/requests'),
+  settings: () => import('./pages/settings'),
+  users: () => import('./pages/user-management'),
+}
 const ArtistDiscographyPage = lazy(() =>
-  import('./pages/artist-discography').then((m) => ({ default: m.ArtistDiscographyPage })),
+  routeChunks.artist().then((m) => ({ default: m.ArtistDiscographyPage })),
 )
 const AlbumDetailsPage = lazy(() =>
-  import('./pages/album-details').then((m) => ({ default: m.AlbumDetailsPage })),
+  routeChunks.album().then((m) => ({ default: m.AlbumDetailsPage })),
 )
-const DiscoverPage = lazy(() =>
-  import('./pages/discover').then((m) => ({ default: m.DiscoverPage })),
-)
+const DiscoverPage = lazy(() => routeChunks.discover().then((m) => ({ default: m.DiscoverPage })))
 const PlaylistDetailPage = lazy(() =>
-  import('./pages/playlist-detail').then((m) => ({ default: m.PlaylistDetailPage })),
+  routeChunks.playlistDetail().then((m) => ({ default: m.PlaylistDetailPage })),
 )
 const PlaylistsPage = lazy(() =>
-  import('./pages/playlists').then((m) => ({ default: m.PlaylistsPage })),
+  routeChunks.playlists().then((m) => ({ default: m.PlaylistsPage })),
 )
-const RequestsPage = lazy(() =>
-  import('./pages/requests').then((m) => ({ default: m.RequestsPage })),
-)
-const SettingsPage = lazy(() =>
-  import('./pages/settings').then((m) => ({ default: m.SettingsPage })),
-)
+const RequestsPage = lazy(() => routeChunks.requests().then((m) => ({ default: m.RequestsPage })))
+const SettingsPage = lazy(() => routeChunks.settings().then((m) => ({ default: m.SettingsPage })))
 const UserManagementPage = lazy(() =>
-  import('./pages/user-management').then((m) => ({ default: m.UserManagementPage })),
+  routeChunks.users().then((m) => ({ default: m.UserManagementPage })),
 )
+
+function usePrefetchRouteChunks() {
+  useEffect(() => {
+    const warm = () => {
+      for (const load of Object.values(routeChunks)) void load().catch(() => {})
+    }
+    const w = window as Window & {
+      requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number
+    }
+    // Give the current page's own requests a head start first.
+    const t = setTimeout(() => {
+      if (w.requestIdleCallback) w.requestIdleCallback(warm, { timeout: 5000 })
+      else warm()
+    }, 2000)
+    return () => clearTimeout(t)
+  }, [])
+}
+
+function RouteSkeleton() {
+  return (
+    <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-4" aria-busy="true">
+      <Skeleton className="h-7 w-48" />
+      <div className="flex gap-2">
+        <Skeleton className="h-8 w-20 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
+        <Skeleton className="h-8 w-20 rounded-full" />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        {[0, 1, 2, 3, 4, 5].map((i) => (
+          <Skeleton key={i} className="h-40 rounded-lg" />
+        ))}
+      </div>
+    </div>
+  )
+}
 
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').catch(() => {})
@@ -237,14 +280,10 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
     staleTime: 30_000,
   })
   const pendingRequestsCount = pendingRequests?.length ?? 0
-  const { data: pipelineStatus } = useQuery({
-    queryKey: ['pipelineStatus'],
-    queryFn: getPipelineStatus,
-    refetchInterval: (query) => (query.state.data?.running ? 3000 : 15000),
-  })
-  const pipelineRunning = pipelineStatus?.running ?? false
+  const { start: startScan, running: pipelineRunning } = useStartScan()
 
   useRealtimeUpdates()
+  usePrefetchRouteChunks()
   useKeyboardShortcuts({ '?': () => setShortcutsOpen((v) => !v) })
 
   function handleModeChange(m: Mode) {
@@ -343,24 +382,11 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
               </div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
+              <ActivityCenter />
               <button
                 type="button"
                 disabled={!!pipelineRunning}
-                onClick={() =>
-                  triggerPipeline()
-                    .then((res) =>
-                      toast.success(
-                        res.status === 'duplicate'
-                          ? 'Scan already running'
-                          : res.queued
-                            ? `Scan queued (position ${res.position ?? 0}) - it will start when the current run finishes`
-                            : 'Scan started - check Dashboard for progress',
-                      ),
-                    )
-                    .catch((err) => {
-                      toast.error(errMsg(err))
-                    })
-                }
+                onClick={startScan}
                 aria-label={pipelineRunning ? 'Scanning...' : 'Run Scan'}
                 title={pipelineRunning ? 'Scanning...' : 'Run Scan'}
                 className="flex h-11 w-11 items-center justify-center rounded-md bg-accent text-accent-fg hover:opacity-90 focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2 disabled:opacity-60 sm:h-9 sm:w-9"
@@ -439,40 +465,46 @@ function InnerApp() {
   // Recommendations-only gate (not app-wide like Lidarr) -- see AiRequiredRoute.
   const [aiRequired, setAiRequired] = useState(false)
 
-  useEffect(() => {
-    getSetupStatus()
-      .then((s) => setSetupComplete(s.setupComplete))
-      .catch(() => setSetupComplete(false))
+  const applyAuthStatus = useCallback((s: Awaited<ReturnType<typeof getAuthStatus>> | null) => {
+    setLidarrGate({ required: !!s?.lidarrRequired, isAdmin: !!s?.isAdmin })
+    setAiRequired(!!s?.aiRequired)
   }, [])
 
   const checkLidarrGate = useCallback(() => {
     getAuthStatus()
-      .then((s) => {
-        setLidarrGate({ required: !!s.lidarrRequired, isAdmin: !!s.isAdmin })
-        setAiRequired(!!s.aiRequired)
-      })
-      .catch(() => {
-        setLidarrGate({ required: false, isAdmin: false })
-        setAiRequired(false)
-      })
-  }, [])
+      .then(applyAuthStatus)
+      .catch(() => applyAuthStatus(null))
+  }, [applyAuthStatus])
 
+  // Setup status and auth status are independent -- fetch them together
+  // instead of one after the other (each used to be its own blank-screen wait).
   useEffect(() => {
-    if (setupComplete) checkLidarrGate()
-  }, [setupComplete, checkLidarrGate])
+    const auth = getAuthStatus().catch(() => null)
+    getSetupStatus()
+      .then((s) => {
+        setSetupComplete(s.setupComplete)
+        if (s.setupComplete) void auth.then(applyAuthStatus)
+      })
+      .catch(() => setSetupComplete(false))
+  }, [applyAuthStatus])
 
-  if (setupComplete === null) return null
+  if (setupComplete === null) return <AppSplash />
 
   if (!setupComplete) {
     return (
       <>
-        <SetupWizard onComplete={() => setSetupComplete(true)} />
+        <SetupWizard
+          onComplete={() => {
+            setSetupComplete(true)
+            checkLidarrGate()
+          }}
+        />
         <Toaster theme="system" />
       </>
     )
   }
 
-  if (lidarrGate === null) return null
+  if (lidarrGate === null) return <AppSplash />
 
   if (lidarrGate.required) {
     return (
@@ -496,9 +528,7 @@ function InnerApp() {
       <BrowserRouter>
         <ErrorBoundary>
           <AppShell aiRequired={aiRequired}>
-            <Suspense
-              fallback={<div className="p-6 text-sm text-muted">{/* lazy route loading */}</div>}
-            >
+            <Suspense fallback={<RouteSkeleton />}>
               <Routes>
                 <Route path="/" element={<Dashboard />} />
                 <Route

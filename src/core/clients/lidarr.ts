@@ -1,3 +1,4 @@
+import { TtlCache } from '@/core/cache/ttl-cache'
 import type { ServiceTestResult } from '@/core/types'
 import { errMsg } from '@/core/validation'
 import { createHttpClient, HttpError } from './http'
@@ -129,6 +130,8 @@ function isAlreadyAdded(err: unknown): boolean {
   return err instanceof HttpError && err.status === 400 && err.body.includes('already been added')
 }
 
+const LOOKUP_CACHE_TTL_MS = 10 * 60 * 1000
+
 export function createLidarrClient(url: string, apiKey: string, skipTlsVerify = false) {
   const http = createHttpClient({
     baseUrl: url,
@@ -174,10 +177,18 @@ export function createLidarrClient(url: string, apiKey: string, skipTlsVerify = 
   // this produced in practice). Give lookups more room before giving up.
   const METADATA_LOOKUP_TIMEOUT_MS = 30_000
 
+  // Metadata lookups go through Lidarr's metadata server (a live MusicBrainz
+  // round-trip on a cold cache) and are repeated constantly: typing in search,
+  // reopening an album, mood results, then the add itself. Memoize briefly.
+  const artistLookupCache = new TtlCache<LidarrArtist[]>(LOOKUP_CACHE_TTL_MS, 300)
+  const albumLookupCache = new TtlCache<LidarrAlbumLookupResult[]>(LOOKUP_CACHE_TTL_MS, 300)
+
   function lookupArtist(term: string): Promise<LidarrArtist[]> {
-    const encoded = new URLSearchParams({ term }).toString()
-    return http.get<LidarrArtist[]>(`/api/v1/artist/lookup?${encoded}`, {
-      timeout: METADATA_LOOKUP_TIMEOUT_MS,
+    return artistLookupCache.get(term, () => {
+      const encoded = new URLSearchParams({ term }).toString()
+      return http.get<LidarrArtist[]>(`/api/v1/artist/lookup?${encoded}`, {
+        timeout: METADATA_LOOKUP_TIMEOUT_MS,
+      })
     })
   }
 
@@ -186,7 +197,11 @@ export function createLidarrClient(url: string, apiKey: string, skipTlsVerify = 
   // request search always resolves to exactly the release-group MBIDs Lidarr
   // itself will later accept via addAlbum, with no separate rate limit to
   // manage.
-  async function lookupAlbum(term: string): Promise<LidarrAlbumLookupResult[]> {
+  function lookupAlbum(term: string): Promise<LidarrAlbumLookupResult[]> {
+    return albumLookupCache.get(term, () => lookupAlbumUncached(term))
+  }
+
+  async function lookupAlbumUncached(term: string): Promise<LidarrAlbumLookupResult[]> {
     const encoded = new URLSearchParams({ term }).toString()
     const raw = await http.get<Record<string, unknown>[]>(`/api/v1/album/lookup?${encoded}`, {
       timeout: METADATA_LOOKUP_TIMEOUT_MS,
@@ -525,4 +540,27 @@ export function createLidarrClient(url: string, apiKey: string, skipTlsVerify = 
     getRootFolders,
     testConnection,
   }
+}
+
+export type LidarrClient = ReturnType<typeof createLidarrClient>
+
+// Request paths used to build a brand-new client (and throw away its root
+// folder / profile caches) on every call. Share one per connection config
+// instead, rebuilt after a short TTL so out-of-band changes made directly in
+// Lidarr's UI (new profile, new root folder) still show up within minutes.
+const SHARED_CLIENT_TTL_MS = 10 * 60 * 1000
+let sharedClient: { key: string; builtAt: number; client: LidarrClient } | null = null
+
+export function getSharedLidarrClient(
+  url: string,
+  apiKey: string,
+  skipTlsVerify = false,
+): LidarrClient {
+  const key = `${url}\u0000${apiKey}\u0000${skipTlsVerify}`
+  if (sharedClient?.key === key && Date.now() - sharedClient.builtAt < SHARED_CLIENT_TTL_MS) {
+    return sharedClient.client
+  }
+  const client = createLidarrClient(url, apiKey, skipTlsVerify)
+  sharedClient = { key, builtAt: Date.now(), client }
+  return client
 }

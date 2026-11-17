@@ -25,9 +25,12 @@ vi.mock('@/core/clients/fanart', () => ({
 
 vi.mock('@/core/clients/lidarr', () => ({
   createLidarrClient: vi.fn(() => mocks.lidarrClient),
+  getSharedLidarrClient: vi.fn(() => mocks.lidarrClient),
 }))
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(() => mocks.musicBrainzClient),
 }))
 

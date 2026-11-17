@@ -5,10 +5,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import type { ReactElement, ReactNode } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+let client: QueryClient
+
 function createQueryWrapper() {
-  const client = new QueryClient({
+  client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
+  if (pendingJob) client.setQueryData(ACTIVITY_KEY, [pendingJob])
   return ({ children }: { children: ReactNode }) => (
     <QueryClientProvider client={client}>{children}</QueryClientProvider>
   )
@@ -22,25 +25,34 @@ vi.mock('@/web/lib/api', () => ({
   getPipelineStatus: vi.fn(),
 }))
 
-// Mock useSSE to avoid real EventSource in jsdom
-vi.mock('@/web/lib/hooks', async (importOriginal) => {
-  const original = await importOriginal<typeof import('@/web/lib/hooks')>()
-  return {
-    ...original,
-    useSSE: vi.fn(() => ({ data: null, connected: false })),
-  }
-})
-
 import { PipelineProgress } from '@/web/components/pipeline-progress'
+import { ACTIVITY_KEY, type ActivityJob } from '@/web/lib/activity'
 import { getPipelineStatus } from '@/web/lib/api'
-import { useSSE } from '@/web/lib/hooks'
 
 const mockGetPipelineStatus = vi.mocked(getPipelineStatus)
-const mockUseSSE = vi.mocked(useSSE)
+
+// The card reads this user's pipeline job from the activity cache (fed by
+// the realtime SSE channel in the app shell).
+let pendingJob: ActivityJob | null = null
+function seedJob(patch: Partial<ActivityJob> | null) {
+  const now = new Date().toISOString()
+  pendingJob = patch
+    ? {
+        id: 'job-1',
+        kind: 'pipeline',
+        label: 'Discovery scan',
+        status: 'running',
+        startedAt: now,
+        updatedAt: now,
+        ...patch,
+      }
+    : null
+}
 
 describe('PipelineProgress', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    pendingJob = null
     vi.useFakeTimers({ shouldAdvanceTime: true })
   })
 
@@ -50,7 +62,7 @@ describe('PipelineProgress', () => {
 
   it('returns null when pipeline is not running and no SSE data', async () => {
     mockGetPipelineStatus.mockResolvedValue({ running: false })
-    mockUseSSE.mockReturnValue({ data: null, connected: false })
+    seedJob(null)
 
     const { container } = renderWithQuery(<PipelineProgress />)
 
@@ -61,7 +73,7 @@ describe('PipelineProgress', () => {
 
   it('renders stage label and percentage when pipeline is running', async () => {
     mockGetPipelineStatus.mockResolvedValue({ running: true, stage: 'analyze' })
-    mockUseSSE.mockReturnValue({ data: null, connected: false })
+    seedJob(null)
 
     renderWithQuery(<PipelineProgress />)
 
@@ -77,10 +89,7 @@ describe('PipelineProgress', () => {
 
   it('renders SSE progress data with current/total counts', async () => {
     mockGetPipelineStatus.mockResolvedValue({ running: true, stage: 'collect' })
-    mockUseSSE.mockReturnValue({
-      data: { stage: 'resolve', current: 5, total: 20, message: 'Looking up artists...' },
-      connected: true,
-    })
+    seedJob({ stage: 'resolve', current: 5, total: 20, message: 'Looking up artists...' })
 
     renderWithQuery(<PipelineProgress />)
 
@@ -93,10 +102,7 @@ describe('PipelineProgress', () => {
 
   it('shows complete stage label', async () => {
     mockGetPipelineStatus.mockResolvedValue({ running: true, stage: 'store' })
-    mockUseSSE.mockReturnValue({
-      data: { stage: 'complete' },
-      connected: true,
-    })
+    seedJob({ status: 'done', stage: 'complete', finishedAt: new Date().toISOString() })
 
     renderWithQuery(<PipelineProgress />)
 
@@ -106,13 +112,21 @@ describe('PipelineProgress', () => {
     })
   })
 
+  it('shows queue position for a queued scan', async () => {
+    mockGetPipelineStatus.mockResolvedValue({ running: true, stage: 'resolve' })
+    seedJob({ status: 'queued', queuePosition: 2 })
+
+    renderWithQuery(<PipelineProgress />)
+
+    await waitFor(() => {
+      expect(screen.getByText(/#2 in line/)).toBeInTheDocument()
+    })
+  })
+
   it('fires onComplete exactly once when stage reaches complete', async () => {
     const onComplete = vi.fn()
     mockGetPipelineStatus.mockResolvedValue({ running: true, stage: 'store' })
-    mockUseSSE.mockReturnValue({
-      data: { stage: 'complete' },
-      connected: true,
-    })
+    seedJob({ status: 'done', stage: 'complete', finishedAt: new Date().toISOString() })
 
     const { rerender } = render(<PipelineProgress onComplete={onComplete} />, {
       wrapper: createQueryWrapper(),

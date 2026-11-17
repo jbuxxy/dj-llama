@@ -4,6 +4,7 @@ import { type PopularAlbumCandidate, selectPopularReleaseGroups } from '@/core/a
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
 import { findExactArtistByName, getPopularAlbumsForArtist } from '@/core/clients/spotify'
 import { decryptChannelSecrets, safeCompare } from '@/core/crypto'
+import { activityTracker } from '@/core/jobs/activity'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
 import { realtimeBroker } from '@/core/realtime/broker'
@@ -848,8 +849,20 @@ export function recommendationRoutes(deps: AppDependencies) {
     })
 
     const results: Array<{ id: number; status: string; error?: string }> = []
+    // Each item goes through the serialized Lidarr write path, so a big batch
+    // takes a while -- show it moving item by item (header + live toast).
+    const activity =
+      userId && ids.length > 1
+        ? activityTracker.start(userId, {
+            kind: 'bulk_action',
+            label: `Sending ${ids.length} picks to Lidarr`,
+            current: 0,
+            total: ids.length,
+          })
+        : null
 
     for (const id of ids) {
+      activity?.update({ current: results.length, message: undefined })
       const rec = await deps.getRecommendation(id)
       if (!rec) {
         results.push({ id, status: 'not_found' })
@@ -874,6 +887,7 @@ export function recommendationRoutes(deps: AppDependencies) {
       if (result.lidarrError) extra.lidarrError = result.lidarrError
       await deps.updateRecommendationStatus(id, result.status, extra)
       results.push({ id, status: result.status })
+      activity?.update({ current: results.length, message: `Sent ${rec.artist.name}` })
       // One notification per approved item, same as the single-approve route --
       // a large "Approve All Above X%" batch will fan out into that many pings.
       if (result.status === 'added_to_lidarr' || result.status === 'add_failed') {
@@ -887,6 +901,18 @@ export function recommendationRoutes(deps: AppDependencies) {
 
     if (userId && results.length > 0) {
       realtimeBroker.publish(userId, { type: 'activity-updated' })
+    }
+    if (activity) {
+      const failed = results.filter((r) => r.status === 'add_failed').length
+      const sent = results.filter(
+        (r) => r.status !== 'not_found' && r.status !== 'add_failed',
+      ).length
+      activity.done({
+        current: undefined,
+        total: undefined,
+        resultSummary: failed > 0 ? `${sent} sent, ${failed} failed` : `${sent} sent to Lidarr`,
+        resultHref: '/discover',
+      })
     }
     return c.json({ results })
   })

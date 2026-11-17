@@ -9,7 +9,7 @@ import {
   RECOMMENDATION_SYSTEM_PRELUDE,
   validateAiRecommendations,
 } from './prompt'
-import { optionalTimeoutSecondsToMs } from './timeout'
+import { DEFAULT_SDK_TIMEOUT_MS, optionalTimeoutSecondsToMs } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const RECOMMENDATION_TOOL_NAME = 'emit_recommendations'
@@ -31,7 +31,7 @@ export class AnthropicProvider implements RecommendationProvider {
     this.client = new Anthropic({
       apiKey,
       ...(baseUrl ? { baseURL: baseUrl } : {}),
-      ...(timeoutMs ? { timeout: timeoutMs } : {}),
+      timeout: timeoutMs ?? DEFAULT_SDK_TIMEOUT_MS,
     })
     this.model = model
   }

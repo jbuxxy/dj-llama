@@ -1,8 +1,55 @@
 import { useQuery } from '@tanstack/react-query'
-import { type FormEvent, useState } from 'react'
+import { type FormEvent, useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { watchJob } from '../lib/activity'
 import { getCurrentUser, getSettings, moodDiscover, quickDiscover } from '../lib/api'
 import { ArtistThumb } from './artist-thumb'
+import { Skeleton } from './ui/skeleton'
+
+// What a mood search is actually doing while the AI call is in flight --
+// rotated so a 10-20s wait reads as progress, not a hung button.
+const MOOD_PHASES = [
+  'Reading the vibe...',
+  'Asking the AI for matching artists...',
+  'Picking an album for each...',
+  'Checking what you already own...',
+  'Finding cover art...',
+]
+
+function MoodSearchProgress() {
+  const [elapsed, setElapsed] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setElapsed((e) => e + 1), 1000)
+    return () => clearInterval(t)
+  }, [])
+  // Advance through phases every ~3s, then hold on the last one.
+  const phase = MOOD_PHASES[Math.min(Math.floor(elapsed / 3), MOOD_PHASES.length - 1)]
+  return (
+    <div className="mt-3" aria-live="polite" aria-busy="true">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-sm text-muted flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full bg-accent animate-pulse" />
+          {phase}
+        </p>
+        <span className="text-xs text-muted tabular-nums">{elapsed}s</span>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+        {[0, 1, 2, 3].map((i) => (
+          <div
+            key={i}
+            className="flex items-center gap-3 rounded border border-border bg-surface p-2"
+          >
+            <Skeleton className="h-12 w-12 shrink-0 rounded" />
+            <div className="flex-1 space-y-1.5">
+              <Skeleton className="h-3.5 w-3/4" />
+              <Skeleton className="h-3 w-1/2" />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
 
 export function MoodPromptBar({
   existingArtistNames,
@@ -52,12 +99,13 @@ export function MoodPromptBar({
 
   async function handleAddToQueue(artistName: string, suggestedAlbum?: string, reasoning?: string) {
     setQueued((prev) => new Set([...prev, artistName]))
+    // The background run reports progress as a live toast and refreshes
+    // Discover itself when it lands (see use-realtime-updates.ts) -- no
+    // guessing with timers.
+    watchJob('quick_discover')
     try {
       await quickDiscover(artistName, { suggestedAlbum, reasoning })
-      toast.success(`Added "${artistName}" and discovering similar artists`)
-      // Seed artist is stored async on the backend - poll for it to appear
-      setTimeout(onQueued, 2000)
-      setTimeout(onQueued, 5000)
+      onQueued()
     } catch {
       toast.error(`Failed to add "${artistName}"`)
       setQueued((prev) => {
@@ -103,7 +151,8 @@ export function MoodPromptBar({
           {loading ? 'Discovering...' : 'Discover'}
         </button>
       </form>
-      {results && (
+      {loading && <MoodSearchProgress />}
+      {!loading && results && (
         <div className="mt-3">
           <div className="flex items-center justify-between mb-2">
             <h3 className="text-sm font-medium text-text">Mood results ({results.length})</h3>

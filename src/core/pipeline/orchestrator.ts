@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events'
 import { envConfig } from '@/config/env'
 import { createLastFmClient } from '@/core/clients/lastfm'
-import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
+import { createMusicBrainzClient, runInBackgroundLane } from '@/core/clients/musicbrainz'
 import { decryptChannelSecrets } from '@/core/crypto'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
@@ -300,90 +300,13 @@ export class PipelineOrchestrator extends EventEmitter {
       const discoverFailures = new Map<string, string>()
       const similarity = deps.similarityProviders ?? []
       const lastfmClient = settings.lastfmApiKey ? createLastFmClient(settings.lastfmApiKey) : null
-      const discovered = await discover(
-        tasteProfile,
-        {
-          listeningSources: registry.all(),
-          ai: aiProvider,
-        },
-        prefs.topArtistsLimit,
-        librarySeeds,
-        prefs.librarySeedRatio ?? 0.3,
-        {
-          onSourceFailure: (sourceId, error) => discoverFailures.set(sourceId, error),
-        },
-      )
-      const aiFailure = discoverFailures.get('ai')
-      if (aiFailure) {
-        this.emit('progress', {
-          stage: 'discover',
-          message: `AI provider failed: ${aiFailure} - continuing without AI suggestions`,
-        })
-      }
-      console.log(
-        `[debug-diag] discover() returned ${discovered.length} candidates; ai configured=${aiProvider != null}; aiFailure=${aiFailure ?? 'none'}`,
-      )
-      this.emit('progress', {
-        stage: 'discover',
-        message: `Discovered ${discovered.length} candidate artists`,
-      })
-
       // Collect per-source results for job recording
       const sourceResults: Record<string, import('@/core/jobs/types').SourceResult> = {}
 
-      // Mark unconfigured (or user-disabled) sources as skipped
-      for (const id of LISTENING_SOURCE_IDS) {
-        if (!registry.all().some((s) => s.id === id)) {
-          const disabled = id === 'plex' && prefs.historySourcesEnabled?.plex === false
-          sourceResults[id] = {
-            status: 'skipped',
-            reason: disabled ? 'disabled_by_user' : 'not_configured',
-          }
-        }
-      }
-      if (!aiProvider) {
-        sourceResults.ai = { status: 'skipped', reason: 'not_configured' }
-      }
-      if (!similarity.some((p) => p.id === 'lastfm')) {
-        sourceResults.lastfm = { status: 'skipped', reason: 'not_configured' }
-      }
-
-      // Tally source contributions from discovered artists
-      const sourceArtistCounts = new Map<string, number>()
-      for (const d of discovered) {
-        const src = d.source ?? 'unknown'
-        sourceArtistCounts.set(src, (sourceArtistCounts.get(src) ?? 0) + 1)
-      }
-      for (const source of registry.all()) {
-        // History-only sources (Plex) feed the taste profile's seed artists,
-        // not candidates -- judge them on that, or they always read as failing.
-        if (!sourceResults[source.id] && !source.capabilities.includes('similarArtists')) {
-          const seeds = tasteProfile.topArtists.filter((a) => a.source === source.id).length
-          sourceResults[source.id] =
-            seeds > 0
-              ? { status: 'ok', role: 'history', artists: seeds }
-              : { status: 'error', role: 'history', error: 'No listening history returned' }
-          continue
-        }
-        if (!sourceResults[source.id]) {
-          const count = sourceArtistCounts.get(source.id) ?? 0
-          sourceResults[source.id] =
-            count > 0
-              ? { status: 'ok', artists: count }
-              : {
-                  status: 'error',
-                  error: discoverFailures.get(source.id) ?? 'No artists returned',
-                }
-        }
-      }
-      if (aiProvider) {
-        const aiCount = sourceArtistCounts.get('ai') ?? 0
-        sourceResults.ai =
-          aiCount > 0
-            ? { status: 'ok', artists: aiCount }
-            : { status: 'error', error: aiFailure ?? 'No artists returned' }
-      }
-
+      // The gap-fill and track-discovery branches only need the taste
+      // profile, not the artist-similarity results -- start them now so the
+      // track-branch AI call runs concurrently with discover()'s artist AI
+      // call instead of after it (two AI round-trips used to be serial).
       // Gap-fill: studio albums missing from artists already in the user's
       // library (owned artist, unowned album). Runs as its own parallel
       // branch, feeding the same resolve()/score()/filter()/store() tail
@@ -473,6 +396,89 @@ export class PipelineOrchestrator extends EventEmitter {
         }
       })()
 
+      const discovered = await discover(
+        tasteProfile,
+        {
+          listeningSources: registry.all(),
+          ai: aiProvider,
+        },
+        prefs.topArtistsLimit,
+        librarySeeds,
+        prefs.librarySeedRatio ?? 0.3,
+        {
+          onSourceFailure: (sourceId, error) => discoverFailures.set(sourceId, error),
+        },
+      )
+      const aiFailure = discoverFailures.get('ai')
+      if (aiFailure) {
+        this.emit('progress', {
+          stage: 'discover',
+          message: `AI provider failed: ${aiFailure} - continuing without AI suggestions`,
+        })
+      }
+      console.log(
+        `[debug-diag] discover() returned ${discovered.length} candidates; ai configured=${aiProvider != null}; aiFailure=${aiFailure ?? 'none'}`,
+      )
+      this.emit('progress', {
+        stage: 'discover',
+        message: `Discovered ${discovered.length} candidate artists`,
+      })
+
+      // Mark unconfigured (or user-disabled) sources as skipped
+      for (const id of LISTENING_SOURCE_IDS) {
+        if (!registry.all().some((s) => s.id === id)) {
+          const disabled = id === 'plex' && prefs.historySourcesEnabled?.plex === false
+          // The track branch (now running concurrently) may already have
+          // recorded a real result for this id; don't clobber it.
+          sourceResults[id] ??= {
+            status: 'skipped',
+            reason: disabled ? 'disabled_by_user' : 'not_configured',
+          }
+        }
+      }
+      if (!aiProvider) {
+        sourceResults.ai = { status: 'skipped', reason: 'not_configured' }
+      }
+      if (!similarity.some((p) => p.id === 'lastfm')) {
+        sourceResults.lastfm = { status: 'skipped', reason: 'not_configured' }
+      }
+
+      // Tally source contributions from discovered artists
+      const sourceArtistCounts = new Map<string, number>()
+      for (const d of discovered) {
+        const src = d.source ?? 'unknown'
+        sourceArtistCounts.set(src, (sourceArtistCounts.get(src) ?? 0) + 1)
+      }
+      for (const source of registry.all()) {
+        // History-only sources (Plex) feed the taste profile's seed artists,
+        // not candidates -- judge them on that, or they always read as failing.
+        if (!sourceResults[source.id] && !source.capabilities.includes('similarArtists')) {
+          const seeds = tasteProfile.topArtists.filter((a) => a.source === source.id).length
+          sourceResults[source.id] =
+            seeds > 0
+              ? { status: 'ok', role: 'history', artists: seeds }
+              : { status: 'error', role: 'history', error: 'No listening history returned' }
+          continue
+        }
+        if (!sourceResults[source.id]) {
+          const count = sourceArtistCounts.get(source.id) ?? 0
+          sourceResults[source.id] =
+            count > 0
+              ? { status: 'ok', artists: count }
+              : {
+                  status: 'error',
+                  error: discoverFailures.get(source.id) ?? 'No artists returned',
+                }
+        }
+      }
+      if (aiProvider) {
+        const aiCount = sourceArtistCounts.get('ai') ?? 0
+        sourceResults.ai =
+          aiCount > 0
+            ? { status: 'ok', artists: aiCount }
+            : { status: 'error', error: aiFailure ?? 'No artists returned' }
+      }
+
       const gapFillCandidates = await gapFillPromise
       console.log(
         `[debug-diag] gap-fill discovery found ${gapFillCandidates.length} missing-album candidates`,
@@ -487,9 +493,17 @@ export class PipelineOrchestrator extends EventEmitter {
         discovered,
         lastfmClient ? (name, mbid) => lastfmClient.getTopTracks(name, mbid, 3) : null,
       )
+      // One combined counter across the artist-pick lookups and the gap-fill
+      // resolve() below, so the progress bar moves steadily through what is
+      // usually the longest stretch of a scan (MusicBrainz at ~1 req/s)
+      // instead of sitting on one static message long enough to look stalled.
+      const resolveTotal = artistPickTracks.length + gapFillCandidates.length
+      let resolveDone = 0
       this.emit('progress', {
         stage: 'resolve',
-        message: `Finding albums for ${artistPickTracks.length + gapFillCandidates.length} picks via MusicBrainz...`,
+        current: 0,
+        total: resolveTotal,
+        message: `Finding albums for ${resolveTotal} picks via MusicBrainz...`,
       })
       const artistPickResolved = (
         await Promise.all(
@@ -501,15 +515,30 @@ export class PipelineOrchestrator extends EventEmitter {
               lidarrClient,
               fanartClient,
               musicinfoClient,
-            ),
+            ).finally(() => {
+              resolveDone++
+              this.emit('progress', {
+                stage: 'resolve',
+                current: resolveDone,
+                total: resolveTotal,
+                message: `Looked up "${track.trackName}" by ${track.artistName}`,
+              })
+            }),
           ),
         )
       ).filter((r): r is NonNullable<typeof r> => r !== null)
+      const pickOffset = resolveDone
       const rawResolved = await resolve(
         gapFillCandidates,
         mbClient,
         (progress) => {
-          this.emit('progress', progress)
+          const p = progress as { current?: number; total?: number }
+          this.emit('progress', {
+            ...progress,
+            ...(typeof p.current === 'number'
+              ? { current: pickOffset + p.current, total: resolveTotal }
+              : {}),
+          })
         },
         lidarrClient,
         fanartClient,
@@ -735,18 +764,30 @@ export class PipelineOrchestrator extends EventEmitter {
     const existing = this.queue.findIndex((q) => q.userId === deps.userId)
     if (existing >= 0) return { status: 'duplicate', position: existing + 1 }
     this.queue.push({ userId: deps.userId, deps })
+    this.emit('queued', { userId: deps.userId, position: this.queue.length })
     return { status: 'queued', position: this.queue.length }
   }
 
   private startRun(deps: PipelineDeps): void {
-    this.run(deps).catch((err: unknown) => {
+    // A scan can be started from inside an interactive request; it must not
+    // inherit that request's front-of-queue MusicBrainz priority.
+    runInBackgroundLane(() => this.run(deps)).catch((err: unknown) => {
       console.error('[orchestrator] queued run failed:', err)
     })
+    // run() has synchronously claimed the slot by now; tell listeners
+    // (activity tracker) immediately rather than after its first await.
+    this.emit('started', { userId: deps.userId })
   }
 
   private drainQueue(): void {
     const next = this.queue.shift()
     if (next) this.startRun(next.deps)
+    if (this.queue.length > 0) {
+      this.emit(
+        'queue-changed',
+        this.queue.map((q, i) => ({ userId: q.userId, position: i + 1 })),
+      )
+    }
   }
 
   get isRunning(): boolean {

@@ -10,6 +10,8 @@ vi.mock('@/core/clients/shazam', () => ({
 }))
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(),
 }))
 

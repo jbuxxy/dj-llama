@@ -4,16 +4,22 @@ import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/core/clients/lidarr', () => ({
-  createLidarrClient: vi.fn(),
+  getSharedLidarrClient: vi.fn(),
+}))
+vi.mock('@/db/queries/lidarr-cache', () => ({
+  getLidarrAlbumTitlesByArtist: vi.fn(async () => new Map()),
 }))
 
-import { createLidarrClient } from '@/core/clients/lidarr'
+import { getSharedLidarrClient } from '@/core/clients/lidarr'
+import { getLidarrAlbumTitlesByArtist } from '@/db/queries/lidarr-cache'
 import { type MoodDeps, moodRoutes } from '@/server/routes/mood'
 
-const mockCreateLidarrClient = vi.mocked(createLidarrClient)
+const mockCreateLidarrClient = vi.mocked(getSharedLidarrClient)
+const mockOwnedTitles = vi.mocked(getLidarrAlbumTitlesByArtist)
 
 function makeDeps(overrides: Partial<MoodDeps> = {}): MoodDeps {
   return {
+    db: {} as MoodDeps['db'],
     getSettings: vi.fn().mockResolvedValue({
       aiProvider: 'openai',
       aiModel: 'gpt-4o-mini',
@@ -117,9 +123,11 @@ describe('POST /api/v1/mood/discover', () => {
   })
 
   it('marks an already-owned suggestion instead of dropping it from the results', async () => {
+    // Ownership comes from the synced library snapshot, keyed by normalized names.
+    mockOwnedTitles.mockResolvedValueOnce(
+      new Map([['grouper', new Set(['dragging a dead deer up a hill'])]]),
+    )
     mockCreateLidarrClient.mockReturnValue({
-      getArtists: vi.fn(async () => [{ id: 1, artistName: 'Grouper', foreignArtistId: 'a-1' }]),
-      getAlbums: vi.fn(async () => [{ id: 10, title: 'Dragging a Dead Deer Up a Hill' }]),
       lookupAlbum: vi.fn(async () => []),
       lookupArtist: vi.fn(async () => []),
     } as never)
@@ -157,8 +165,6 @@ describe('POST /api/v1/mood/discover', () => {
 
   it('resolves cover art for a suggested album via Lidarr album lookup, ranked by relevance', async () => {
     mockCreateLidarrClient.mockReturnValue({
-      getArtists: vi.fn(async () => []),
-      getAlbums: vi.fn(async () => []),
       lookupAlbum: vi.fn(async (term: string) => {
         expect(term).toBe('Dragging a Dead Deer Up a Hill')
         return [
@@ -205,8 +211,6 @@ describe('POST /api/v1/mood/discover', () => {
 
   it('falls back to Lidarr artist lookup for cover art when there is no suggestedAlbum', async () => {
     mockCreateLidarrClient.mockReturnValue({
-      getArtists: vi.fn(async () => []),
-      getAlbums: vi.fn(async () => []),
       lookupAlbum: vi.fn(async () => []),
       lookupArtist: vi.fn(async () => [
         {

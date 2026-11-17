@@ -50,6 +50,10 @@ export class OllamaProvider implements RecommendationProvider {
             messages: [{ role: 'user', content: prompt }],
             format: 'json',
             stream: false,
+            // Keep the model resident between calls: a scan makes two AI calls
+            // back to back and mood searches come in bursts, and Ollama's 5m
+            // default meant paying a cold model load (often 10s+) repeatedly.
+            keep_alive: '30m',
           }),
           signal: controller.signal,
         },

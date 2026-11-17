@@ -15,6 +15,8 @@ vi.mock('@/core/clients/deezer', () => ({
 }))
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(() => ({
     lookupArtist: vi.fn(async () => ({})),
     searchArtist: vi.fn(async () => ({ artists: [] })),

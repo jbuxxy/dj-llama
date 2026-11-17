@@ -10,6 +10,7 @@ import {
   SENSITIVE_TARGET_CONFIG,
   SENSITIVE_USER_CONNECTIONS,
 } from '@/core/crypto'
+import { invalidateSettingsCache } from '@/db/queries/settings'
 import {
   albumBlocks,
   artistBlocks,
@@ -508,6 +509,7 @@ export async function restoreBackup(
       tablesRestored[spec.key] = rows.length
     }
   })
+  invalidateSettingsCache(db)
 
   return {
     tablesRestored,

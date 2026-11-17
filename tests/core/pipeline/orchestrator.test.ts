@@ -55,6 +55,8 @@ vi.mock('@/core/clients/lidarr', () => ({
 }))
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(() => ({
     lookupArtist: vi.fn(),
     searchArtist: vi.fn(),

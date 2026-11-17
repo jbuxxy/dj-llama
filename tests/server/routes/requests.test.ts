@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HonoEnv } from '@/server/types'
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(),
 }))
 

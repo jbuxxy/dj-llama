@@ -772,8 +772,8 @@ export type RequestSearchResults = {
   artists: RequestSearchArtist[]
 }
 
-export const searchRequestable = (q: string) =>
-  fetchApi<RequestSearchResults>(`/requests/search?q=${encodeURIComponent(q)}`)
+export const searchRequestable = (q: string, signal?: AbortSignal) =>
+  fetchApi<RequestSearchResults>(`/requests/search?q=${encodeURIComponent(q)}`, { signal })
 
 export type RequestSearchTrack = {
   recordingMbid: string
@@ -789,8 +789,10 @@ export type RequestSearchTrack = {
   inLidarr: boolean
 }
 
-export const searchTracksRequestable = (q: string) =>
-  fetchApi<{ tracks: RequestSearchTrack[] }>(`/requests/search-tracks?q=${encodeURIComponent(q)}`)
+export const searchTracksRequestable = (q: string, signal?: AbortSignal) =>
+  fetchApi<{ tracks: RequestSearchTrack[] }>(`/requests/search-tracks?q=${encodeURIComponent(q)}`, {
+    signal,
+  })
 
 export type IdentifySongResult =
   | { matched: false }

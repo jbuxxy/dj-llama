@@ -1,4 +1,16 @@
-import { and, count, desc, eq, gte, inArray, isNull, or, type SQL, sql } from 'drizzle-orm'
+import {
+  and,
+  count,
+  desc,
+  eq,
+  getTableColumns,
+  gte,
+  inArray,
+  isNull,
+  or,
+  type SQL,
+  sql,
+} from 'drizzle-orm'
 import type { GenreFeedback } from '@/core/pipeline/score'
 import type { RejectionReason } from '@/core/recommendations/rejection-reasons'
 import { isValidStatus, parseStatusFilter } from '@/core/recommendations/statuses'
@@ -16,6 +28,17 @@ type RecommendationRow = typeof recommendations.$inferSelect
 type ArtistRow = typeof artists.$inferSelect
 
 export type RecommendationWithArtist = RecommendationRow & { artist: ArtistRow }
+/** List rows carry a slimmed artist (see listArtistColumns). */
+export type ListedArtist = Omit<
+  ArtistRow,
+  | 'topTracks'
+  | 'description'
+  | 'externalLinks'
+  | 'wikidataId'
+  | 'wikidataFetchedAt'
+  | 'wikidataFailedAt'
+>
+export type ListedRecommendation = RecommendationRow & { artist: ListedArtist }
 
 const DECADE_RANGES: Record<string, [number, number]> = {
   '60s': [1960, 1969],
@@ -46,9 +69,23 @@ export type ListRecommendationsFilters = {
 }
 
 export type ListRecommendationsResult = {
-  items: RecommendationWithArtist[]
+  items: ListedRecommendation[]
   total: number
 }
+
+// List views (Discover cards, exports, batch summaries) never read the big
+// per-artist JSON blobs -- top tracks, Wikidata description/links -- which are
+// served by their own /artists/:id/* endpoints. Leaving them out keeps a
+// 50-card page from dragging kilobytes of unused JSON per row.
+const {
+  topTracks: _topTracks,
+  description: _description,
+  externalLinks: _externalLinks,
+  wikidataId: _wikidataId,
+  wikidataFetchedAt: _wikidataFetchedAt,
+  wikidataFailedAt: _wikidataFailedAt,
+  ...listArtistColumns
+} = getTableColumns(artists)
 
 export async function listRecommendations(
   db: Database,
@@ -105,7 +142,7 @@ export async function listRecommendations(
     db
       .select({
         recommendation: recommendations,
-        artist: artists,
+        artist: listArtistColumns,
       })
       .from(recommendations)
       .innerJoin(artists, eq(recommendations.artistId, artists.id))

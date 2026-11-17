@@ -22,6 +22,8 @@ vi.mock('@/db/queries/users', async (importOriginal) => ({
 }))
 
 vi.mock('@/core/clients/musicbrainz', () => ({
+  runInteractive: <T>(fn: () => T) => fn(),
+  runInBackgroundLane: <T>(fn: () => T) => fn(),
   createMusicBrainzClient: vi.fn(() => ({
     getReleaseGroups: vi.fn(async () => [
       { id: 'rg-dummy', title: 'Dummy', type: 'Album', firstReleaseDate: '1994-08-22' },

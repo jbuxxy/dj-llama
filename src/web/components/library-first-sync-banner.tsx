@@ -14,7 +14,14 @@ export function LibraryFirstSyncBanner() {
   const sourcesQuery = useQuery({
     queryKey: ['library', 'sources'],
     queryFn: getLibrarySources,
-    refetchInterval: 5000,
+    enabled: !dismissed,
+    // Poll only while a first sync is actually in progress; once it's done
+    // (or the banner is dismissed) this stops entirely.
+    refetchInterval: (query) => {
+      const list = query.state.data?.sources
+      if (!list) return 5000
+      return list.length === 0 || list.some((s) => s.lastSyncStatus === 'running') ? 5000 : false
+    },
   })
 
   if (dismissed) return null

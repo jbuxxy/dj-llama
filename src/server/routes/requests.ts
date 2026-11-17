@@ -1,6 +1,6 @@
 import { and, eq, inArray } from 'drizzle-orm'
 import { Hono } from 'hono'
-import { createLidarrClient } from '@/core/clients/lidarr'
+import { getSharedLidarrClient } from '@/core/clients/lidarr'
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
 import { decryptChannelSecrets } from '@/core/crypto'
 import { normalizeAlbumTitle } from '@/core/library/normalize'
@@ -53,7 +53,7 @@ const isTargetSuccess = (action: unknown): boolean => {
 export async function getLidarrClient(deps: AppDependencies) {
   const settings = await deps.getSettings()
   if (!settings?.lidarrUrl || !settings?.lidarrApiKey) return null
-  const client = createLidarrClient(
+  const client = getSharedLidarrClient(
     settings.lidarrUrl as string,
     settings.lidarrApiKey as string,
     (settings.skipTlsVerify as boolean) ?? false,

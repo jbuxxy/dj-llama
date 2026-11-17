@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm'
+import { and, count, desc, eq, gte, inArray, isNotNull, lt, ne } from 'drizzle-orm'
 import type { JobRunRow, JobType, SourceResult } from '@/core/jobs/types'
 import type { Database } from '@/db'
 import { jobRuns, recommendations } from '@/db/schema'
@@ -239,4 +239,13 @@ export async function getDigestStats(db: Database, since: Date): Promise<DigestS
     added: addedRows[0]?.count ?? 0,
     runs: runRows[0]?.count ?? 0,
   }
+}
+
+/** Deletes finished job runs that started before `before`. Returns rows removed. */
+export async function pruneJobRuns(db: Database, before: Date): Promise<number> {
+  const rows = await db
+    .delete(jobRuns)
+    .where(and(lt(jobRuns.startedAt, before), ne(jobRuns.status, 'running')))
+    .returning({ id: jobRuns.id })
+  return rows.length
 }

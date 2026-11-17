@@ -12,7 +12,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import type { NotificationChannel, NotificationEvent } from '@/core/notifications/types'
@@ -51,10 +51,17 @@ import {
   updateSettings,
   updateUserPreferences,
 } from '../lib/api'
-import { AnalyticsPage } from './analytics'
-import JobHistoryPage from './job-history'
-import { LibraryHealthPage } from './library-health'
-import { UserManagementPage } from './user-management'
+
+// Heavier admin tabs load on demand so opening Settings only pulls in the
+// tab you're looking at (charts in Analytics, the health checks, etc.).
+const AnalyticsPage = lazy(() => import('./analytics').then((m) => ({ default: m.AnalyticsPage })))
+const JobHistoryPage = lazy(() => import('./job-history'))
+const LibraryHealthPage = lazy(() =>
+  import('./library-health').then((m) => ({ default: m.LibraryHealthPage })),
+)
+const UserManagementPage = lazy(() =>
+  import('./user-management').then((m) => ({ default: m.UserManagementPage })),
+)
 
 type Settings = {
   lidarrUrl?: string
@@ -2160,21 +2167,33 @@ export function SettingsPage() {
       <div className={settingsLayoutClass}>
         <SettingsNav groups={navGroups} active={tab} onChange={handleTabChange} />
         <div className={`min-w-0 ${NARROW_TABS.has(tab) ? 'max-w-3xl' : ''}`}>
-          {tab === 'connections' && <ConnectionsTab settings={data} onSaved={refetch} />}
-          {tab === 'discovery' && <DiscoveryTab settings={data} isAdmin={isAdmin} />}
-          {tab === 'schedule' && <ScheduleTab settings={data} />}
-          {tab === 'users' && <UserManagementPage embedded />}
-          {tab === 'administration' && <AdministrationTab />}
-          {tab === 'system-health' && (
-            <div className="space-y-8">
-              <SystemHealthCard embedded />
-              <JobHistoryPage embedded />
-            </div>
-          )}
-          {tab === 'library-health' && <LibraryHealthPage embedded />}
-          {tab === 'analytics' && <AnalyticsPage embedded />}
+          <Suspense fallback={<SettingsTabSkeleton />}>
+            {tab === 'connections' && <ConnectionsTab settings={data} onSaved={refetch} />}
+            {tab === 'discovery' && <DiscoveryTab settings={data} isAdmin={isAdmin} />}
+            {tab === 'schedule' && <ScheduleTab settings={data} />}
+            {tab === 'users' && <UserManagementPage embedded />}
+            {tab === 'administration' && <AdministrationTab />}
+            {tab === 'system-health' && (
+              <div className="space-y-8">
+                <SystemHealthCard embedded />
+                <JobHistoryPage embedded />
+              </div>
+            )}
+            {tab === 'library-health' && <LibraryHealthPage embedded />}
+            {tab === 'analytics' && <AnalyticsPage embedded />}
+          </Suspense>
         </div>
       </div>
+    </div>
+  )
+}
+
+function SettingsTabSkeleton() {
+  return (
+    <div className="space-y-3" aria-busy="true">
+      <Skeleton className="h-6 w-40" />
+      <Skeleton className="h-24 w-full rounded-lg" />
+      <Skeleton className="h-24 w-full rounded-lg" />
     </div>
   )
 }

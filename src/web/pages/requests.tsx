@@ -10,7 +10,7 @@ import {
   User as UserIcon,
   X,
 } from 'lucide-react'
-import { useDeferredValue, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errMsg } from '@/core/validation'
@@ -19,6 +19,7 @@ import { LibraryAlbumCoverageBadge } from '../components/library-album-coverage-
 import { PagerBar } from '../components/pager-bar'
 import { Button } from '../components/ui/button'
 import { Card, CardContent } from '../components/ui/card'
+import { useDebouncedValue } from '../hooks/use-debounced-value'
 import {
   approveRequest,
   createRequest,
@@ -242,7 +243,10 @@ export function RequestsPage() {
   const queryClient = useQueryClient()
   const [mode, setMode] = useState<SearchMode>('artists')
   const [query, setQuery] = useState('')
-  const deferredQuery = useDeferredValue(query)
+  // A real debounce (useDeferredValue isn't one) -- each search fans out to
+  // Lidarr's metadata proxy, so firing per keystroke queued up work nobody
+  // would ever see. Superseded requests are also aborted via `signal`.
+  const deferredQuery = useDebouncedValue(query.trim(), 300)
 
   // Track search hits MusicBrainz directly (no Lidarr proxy exists for
   // recording search), which is rate-limited to ~1 req/sec and needs a
@@ -269,14 +273,15 @@ export function RequestsPage() {
 
   const searchQuery = useQuery({
     queryKey: ['requests-search', deferredQuery],
-    queryFn: () => searchRequestable(deferredQuery),
+    queryFn: ({ signal }) => searchRequestable(deferredQuery, signal),
+    placeholderData: keepPreviousData,
     enabled: mode === 'artists' && deferredQuery.trim().length >= 2,
     staleTime: 30_000,
   })
 
   const trackSearchQuery = useQuery({
     queryKey: ['requests-search-tracks', submittedTrackQuery],
-    queryFn: () => searchTracksRequestable(submittedTrackQuery),
+    queryFn: ({ signal }) => searchTracksRequestable(submittedTrackQuery, signal),
     enabled: mode === 'tracks' && submittedTrackQuery.trim().length >= 2,
     staleTime: 30_000,
   })
@@ -587,7 +592,7 @@ export function RequestsPage() {
   }
 
   const showResults = mode === 'artists' && deferredQuery.trim().length >= 2
-  const isPending = query !== deferredQuery || searchQuery.isLoading
+  const isPending = query.trim() !== deferredQuery || searchQuery.isFetching
   const albums = searchQuery.data?.albums ?? []
   const artists = searchQuery.data?.artists ?? []
 
@@ -657,8 +662,11 @@ export function RequestsPage() {
               className="w-full pl-9 pr-4 py-2.5 bg-surface border border-border rounded-lg text-text placeholder:text-muted text-sm focus:outline-none focus:border-accent transition-colors"
             />
           </div>
-          <Button onClick={submitTrackSearch} disabled={trackQuery.trim().length < 2}>
-            Search
+          <Button
+            onClick={submitTrackSearch}
+            disabled={trackQuery.trim().length < 2 || isTrackPending}
+          >
+            {isTrackPending ? 'Searching...' : 'Search'}
           </Button>
         </div>
       )}

@@ -96,7 +96,7 @@ vi.mock('@/db/queries/playlists', () => ({
 }))
 
 vi.mock('@/db/queries/playlist-collage', () => ({
-  getPlaylistCollages: vi.fn().mockResolvedValue(new Map()),
+  getPlaylistCollagesCached: vi.fn().mockResolvedValue(new Map()),
 }))
 
 // Mock generator to avoid running real generation in tests
@@ -430,7 +430,7 @@ describe('POST /api/v1/playlists/:id/generate', () => {
     expect(res.status).toBe(202)
     const body = (await res.json()) as { status: string }
     expect(body.status).toBe('generating')
-    expect(deps.runPlaylistGeneration).toHaveBeenCalledWith(1)
+    expect(deps.runPlaylistGeneration).toHaveBeenCalledWith(1, { userId: 42, name: 'Weekly Mix' })
   })
 
   it('hides cross-user playlist with 404', async () => {

@@ -686,8 +686,8 @@ describe('POST /api/v1/library/sync', () => {
     expect(body.userId).toBe(1)
     expect(body.results).toEqual([])
     expect(order).toEqual(['global', 'user'])
-    expect(syncForUser).toHaveBeenCalledWith(42, { force: true })
-    expect(syncGlobal).toHaveBeenCalledWith({ force: true })
+    expect(syncForUser).toHaveBeenCalledWith(42, expect.objectContaining({ force: true }))
+    expect(syncGlobal).toHaveBeenCalledWith(expect.objectContaining({ force: true }))
   })
 
   it('fires syncSpecificSource when source provided', async () => {
@@ -701,7 +701,7 @@ describe('POST /api/v1/library/sync', () => {
     expect(librarySync.syncSpecificSource as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
       42,
       'plex',
-      { force: true },
+      expect.objectContaining({ force: true }),
     )
   })
 
@@ -730,8 +730,18 @@ describe('POST /api/v1/library/sync', () => {
     const body = await res.json()
     expect(body.status).toBe('completed')
     expect(syncSpecificSource).toHaveBeenCalledTimes(2)
-    expect(syncSpecificSource).toHaveBeenNthCalledWith(1, 42, 'plex', { force: true })
-    expect(syncSpecificSource).toHaveBeenNthCalledWith(2, null, 'plex', { force: true })
+    expect(syncSpecificSource).toHaveBeenNthCalledWith(
+      1,
+      42,
+      'plex',
+      expect.objectContaining({ force: true }),
+    )
+    expect(syncSpecificSource).toHaveBeenNthCalledWith(
+      2,
+      null,
+      'plex',
+      expect.objectContaining({ force: true }),
+    )
   })
 
   it('POST /api/v1/library/sync returns 202 when body omits source', async () => {

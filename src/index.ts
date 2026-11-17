@@ -8,6 +8,7 @@ import { createDeezerClient } from './core/clients/deezer'
 import { fetchDeezerPlaylistTracks } from './core/clients/deezer-playlist'
 import {
   createLidarrClient,
+  getSharedLidarrClient,
   type LidarrAlbum,
   type LidarrAlbumLookupResult,
 } from './core/clients/lidarr'
@@ -21,9 +22,12 @@ import {
 import { getPlaylistTracks as getYoutubeMusicPlaylistTracks } from './core/clients/youtube-music'
 import { decryptChannelSecrets, initEncryption, isEncryptionEnabled } from './core/crypto'
 import { GenreService } from './core/genre/service'
+import { activityTracker, trackActivity } from './core/jobs/activity'
 import { startDigestNotifier } from './core/jobs/digest-notifier'
+import { bridgePipelineActivity } from './core/jobs/pipeline-activity'
 import { recordFailureSafely } from './core/jobs/record-failure-safely'
 import { createJobRecorder } from './core/jobs/recorder'
+import { startJobRetention } from './core/jobs/retention'
 import { startStuckDetector } from './core/jobs/stuck-detector'
 import { createAlbumCoverageService } from './core/library/album-coverage'
 import { LibraryHealthService } from './core/library/health'
@@ -354,6 +358,7 @@ librarySyncStore
   .catch((err) => console.error('[startup] Library sync state sweep failed:', err))
 
 const orchestrator = new PipelineOrchestrator()
+bridgePipelineActivity(orchestrator, activityTracker)
 const scheduler = new CronScheduler('[scheduler]')
 const playlistScheduler = new PlaylistScheduler()
 
@@ -392,7 +397,7 @@ function makeLazyLidarrClient() {
   async function getClient() {
     const s = await getSettings(db)
     if (s?.lidarrUrl && s?.lidarrApiKey) {
-      return createLidarrClient(s.lidarrUrl, s.lidarrApiKey, s.skipTlsVerify ?? false)
+      return getSharedLidarrClient(s.lidarrUrl, s.lidarrApiKey, s.skipTlsVerify ?? false)
     }
     return null
   }
@@ -1890,16 +1895,41 @@ async function sweepLiveTracksInPlaylist(playlistId: number): Promise<SweepLiveT
 // a second time; the caller just gets the pending run.
 let playlistGenerationTail: Promise<unknown> = Promise.resolve()
 const queuedPlaylistGenerations = new Map<number, Promise<void>>()
+// Runs waiting or in progress, so a newly queued one knows its place in line.
+let playlistQueueDepth = 0
 
-function executePlaylistGeneration(playlistId: number): Promise<void> {
+function executePlaylistGeneration(
+  playlistId: number,
+  owner?: { userId: number; name: string },
+): Promise<void> {
   const pending = queuedPlaylistGenerations.get(playlistId)
   if (pending) return pending
-  const run = playlistGenerationTail.then(() => {
-    // Leaves the queue map when it starts, so a Generate tapped mid-run
-    // queues a fresh run after this one instead of being swallowed by it.
-    queuedPlaylistGenerations.delete(playlistId)
-    return generatePlaylistNow(playlistId)
-  })
+  if (owner && !activityTracker.findActive(owner.userId, 'playlist', String(playlistId))) {
+    const ahead = playlistQueueDepth
+    activityTracker.start(owner.userId, {
+      kind: 'playlist',
+      ref: String(playlistId),
+      label: owner.name,
+      ...(ahead > 0
+        ? {
+            status: 'queued' as const,
+            queuePosition: ahead,
+            message: `Waiting for ${ahead} other playlist${ahead === 1 ? '' : 's'}`,
+          }
+        : { message: 'Starting...' }),
+    })
+  }
+  playlistQueueDepth++
+  const run = playlistGenerationTail
+    .then(() => {
+      // Leaves the queue map when it starts, so a Generate tapped mid-run
+      // queues a fresh run after this one instead of being swallowed by it.
+      queuedPlaylistGenerations.delete(playlistId)
+      return generatePlaylistNow(playlistId)
+    })
+    .finally(() => {
+      playlistQueueDepth--
+    })
   queuedPlaylistGenerations.set(playlistId, run)
   playlistGenerationTail = run.catch(() => undefined)
   return run
@@ -1919,6 +1949,24 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
   // returns) so the single `finally` below can always tell the client which
   // way it went, regardless of which path finished the job.
   let outcome: 'success' | 'error' = 'success'
+  let failure: string | null = null
+  let readyTrackCount: number | null = null
+  // Scheduled runs show up in the activity feed too ("Daily Mix refreshing")
+  // -- reuse the queued entry a manual Generate created, else start one.
+  const activity =
+    playlist.userId == null
+      ? null
+      : (activityTracker.findActive(playlist.userId, 'playlist', String(playlist.id)) ??
+        activityTracker.start(playlist.userId, {
+          kind: 'playlist',
+          ref: String(playlist.id),
+          label: playlist.name,
+        }))
+  activity?.update({
+    status: 'running',
+    queuePosition: undefined,
+    message: playlist.strategy === 'import' ? 'Importing tracks...' : 'Picking tracks...',
+  })
 
   try {
     jobId = await jobRecorder.start({
@@ -2070,6 +2118,7 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
         .catch((err) => console.error('Notification dispatch failed:', err))
     }
 
+    readyTrackCount = generation.tracks.length
     if (jobId != null) {
       await jobRecorder.complete(jobId, {
         metadata: {
@@ -2081,6 +2130,7 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
     }
   } catch (err: unknown) {
     outcome = 'error'
+    failure = errMsg(err)
     if (jobId != null) {
       await recordFailureSafely(jobRecorder, jobId, errMsg(err))
     }
@@ -2097,6 +2147,15 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
         status: outcome,
       })
     }
+    if (outcome === 'error') activity?.fail(failure ?? 'Playlist generation failed')
+    else
+      activity?.done({
+        resultHref: `/playlists/${playlist.id}`,
+        resultSummary:
+          readyTrackCount != null
+            ? `${readyTrackCount} track${readyTrackCount === 1 ? '' : 's'} ready`
+            : 'Ready',
+      })
   }
 }
 
@@ -2205,6 +2264,7 @@ async function restartPlaylistScheduler(): Promise<void> {
 let librarySyncCron: Cron | null = null
 let libraryHealthCron: Cron | null = null
 let stuckDetectorCron: Cron | null = null
+let jobRetentionCron: Cron | null = null
 let digestNotifierCron: Cron | null = null
 let plexUserSyncCron: Cron | null = null
 
@@ -2274,6 +2334,9 @@ const TASTE_PROFILE_EMPTY: TasteProfileCache = { genres: [] }
 // elapsed -- the first-ever call for a user has no cache yet so it populates
 // synchronously, then every call after that serves the cache until it's
 // stale ("populate immediately, then update periodically").
+// Users whose stale profile is being rebuilt in the background right now.
+const tasteRefreshInFlight = new Set<number>()
+
 async function getTasteProfile(userId: number | undefined): Promise<TasteProfileCache> {
   if (!userId) return TASTE_PROFILE_EMPTY
 
@@ -2283,7 +2346,31 @@ async function getTasteProfile(userId: number | undefined): Promise<TasteProfile
   if (cached && Date.now() - cachedAt < TASTE_PROFILE_TTL_MS) {
     return cached
   }
+  // Stale-while-revalidate: a stale profile is still a perfectly good thing
+  // to show. Return it now and rebuild in the background (Plex history + an
+  // AI call can take many seconds); the activity feed tells the dashboard to
+  // refetch when the fresh one lands.
+  if (cached) {
+    if (!tasteRefreshInFlight.has(userId)) {
+      tasteRefreshInFlight.add(userId)
+      void trackActivity(
+        userId,
+        { kind: 'taste_profile', label: 'Updating your taste profile' },
+        () => computeTasteProfile(userId, cached),
+        () => ({ resultSummary: 'Taste profile updated' }),
+      )
+        .catch((err) => console.warn('[taste] background refresh failed:', errMsg(err)))
+        .finally(() => tasteRefreshInFlight.delete(userId))
+    }
+    return cached
+  }
+  return computeTasteProfile(userId, null)
+}
 
+async function computeTasteProfile(
+  userId: number,
+  cached: TasteProfileCache | null,
+): Promise<TasteProfileCache> {
   const settings = await getSettings(db)
   if (!settings) return cached ?? TASTE_PROFILE_EMPTY
 
@@ -2424,7 +2511,7 @@ const appDeps: AppDependencies = {
   updateSettings: (partial) => updateSettings(db, partial),
   completeSetup: (config) => completeSetup(db, config),
   getLastBatch: async () => {
-    const batches = await listBatches(db)
+    const batches = await listBatches(db, { limit: 1 })
     return batches[0] ?? null
   },
   listRecommendations: (filters) => listRecommendations(db, filters),
@@ -2493,7 +2580,7 @@ const appDeps: AppDependencies = {
   playlistDeps: {
     db,
     playlistScheduler,
-    runPlaylistGeneration: (playlistId) => executePlaylistGeneration(playlistId),
+    runPlaylistGeneration: (playlistId, owner) => executePlaylistGeneration(playlistId, owner),
     pushPendingReviewPlaylist: (playlistId) => pushPendingReviewPlaylist(playlistId),
     restartPlaylistScheduler,
     generateAiPlaylistPreview: (userId, prompt, size, options) =>
@@ -2621,6 +2708,7 @@ const server = serve({ fetch: app.fetch, port })
     )
 
     stuckDetectorCron = startStuckDetector(jobRecorder)
+    jobRetentionCron = startJobRetention(db)
 
     // Start scheduled notification digest (no-op until digestCron is configured)
     digestNotifierCron = await startDigestNotifier(buildDigestDeps())
@@ -2672,6 +2760,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     scheduler.stopAll()
     playlistScheduler.stopAll()
     stuckDetectorCron?.stop()
+    jobRetentionCron?.stop()
     digestNotifierCron?.stop()
     librarySyncCron?.stop()
     libraryHealthCron?.stop()

@@ -360,7 +360,7 @@ async function buildResolvedArtist(
   const streamingUrls = mb.extractStreamingUrls(mbArtist.relations ?? [])
 
   // AudioDB first, then Lidarr -> fanart.tv -> musicinfo.pro
-  const imageResult = await fetchArtistImage(
+  const imageResult = await fetchArtistImageCached(
     mbArtist.id,
     mbArtist.name,
     audiodb,
@@ -427,6 +427,34 @@ async function buildResolvedArtist(
     releaseGroupMbid,
     releaseDate,
   }
+}
+
+// Successful image lookups, shared across scans: the same artists recur
+// scan after scan, and each miss walks AudioDB -> Lidarr (30s timeout) ->
+// fanart -> musicinfo. Only hits are kept, so a newly-added image upstream is
+// still found next time. The admin "refresh artist data" rescan calls
+// fetchArtistImage directly to bypass this.
+const IMAGE_HIT_TTL_MS = 12 * 60 * 60 * 1000
+const IMAGE_HIT_MAX = 5000
+const imageHits = new Map<string, { at: number; url: string; logoUrl?: string }>()
+
+export async function fetchArtistImageCached(
+  ...args: Parameters<typeof fetchArtistImage>
+): ReturnType<typeof fetchArtistImage> {
+  const [mbid] = args
+  const hit = imageHits.get(mbid)
+  if (hit && Date.now() - hit.at < IMAGE_HIT_TTL_MS) {
+    return { url: hit.url, logoUrl: hit.logoUrl, failed: false }
+  }
+  const result = await fetchArtistImage(...args)
+  if (result.url) {
+    if (imageHits.size >= IMAGE_HIT_MAX) {
+      const oldest = imageHits.keys().next().value
+      if (oldest !== undefined) imageHits.delete(oldest)
+    }
+    imageHits.set(mbid, { at: Date.now(), url: result.url, logoUrl: result.logoUrl })
+  }
+  return result
 }
 
 export async function fetchArtistImage(
@@ -714,7 +742,7 @@ export async function resolveTrackToAlbum(
 
     const mbArtist = await mb.lookupArtist(recording.artistMbid)
     const tags = (mbArtist.tags ?? []).map((t) => t.name)
-    const imageResult = await fetchArtistImage(
+    const imageResult = await fetchArtistImageCached(
       mbArtist.id,
       mbArtist.name,
       audiodb,

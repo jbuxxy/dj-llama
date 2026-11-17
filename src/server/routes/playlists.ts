@@ -10,7 +10,7 @@ import type { GenerationResult } from '@/core/playlists/generator'
 import type { PlaylistScheduler } from '@/core/playlists/scheduler'
 import type { SweepLiveTracksResult } from '@/core/targets/plex-playlist'
 import type { Database } from '@/db'
-import { getPlaylistCollages } from '@/db/queries/playlist-collage'
+import { getPlaylistCollagesCached } from '@/db/queries/playlist-collage'
 import type { MissingTrackWithResolution } from '@/db/queries/playlist-missing-tracks'
 import type {
   ImportedPlaylistWithOwner,
@@ -51,7 +51,10 @@ import type { HonoEnv } from '@/server/types'
 export type PlaylistDeps = {
   db: Database
   playlistScheduler: PlaylistScheduler
-  runPlaylistGeneration: (playlistId: number) => Promise<void>
+  runPlaylistGeneration: (
+    playlistId: number,
+    owner?: { userId: number; name: string },
+  ) => Promise<void>
   // Activates a pending_review playlist by pushing its already-generated
   // tracks to Plex, without re-running the strategy. Returns false when the
   // owner has no usable Plex connection or the push itself failed.
@@ -239,10 +242,10 @@ export function playlistRoutes(deps: PlaylistDeps) {
     // Playlists without their own cover (everything but imports) get a 2x2
     // album collage built from their tracks instead.
     async function withCollages(rows: PlaylistRow[]) {
-      const collages = await getPlaylistCollages(
+      const collages = await getPlaylistCollagesCached(
         db,
         userId as number,
-        rows.filter((r) => !r.coverUrl).map((r) => r.id),
+        rows.filter((r) => !r.coverUrl),
       )
       return rows.map((r) => ({ ...r, collageUrls: collages.get(r.id) ?? [] }))
     }
@@ -375,9 +378,11 @@ export function playlistRoutes(deps: PlaylistDeps) {
     const loaded = await loadOwnedPlaylist(c, id, userId)
     if (!loaded.ok) return loaded.response
 
-    // Fire-and-forget
+    // Fire-and-forget. Passing the owner lets the queue show this as
+    // "queued" in the user's activity feed right away.
+    const owner = { userId, name: loaded.result.playlist.name }
     Promise.resolve()
-      .then(() => deps.runPlaylistGeneration(id))
+      .then(() => deps.runPlaylistGeneration(id, owner))
       .catch((err: unknown) => {
         console.error(`[playlists] Generation failed for playlist ${id}:`, err)
       })
@@ -602,8 +607,12 @@ export function playlistRoutes(deps: PlaylistDeps) {
       )
     }
 
+    const owner =
+      existing.playlist.userId != null
+        ? { userId: existing.playlist.userId, name: existing.playlist.name }
+        : undefined
     Promise.resolve()
-      .then(() => deps.runPlaylistGeneration(id))
+      .then(() => deps.runPlaylistGeneration(id, owner))
       .catch((err: unknown) => {
         console.error(`[playlists] Admin-triggered generation failed for playlist ${id}:`, err)
       })

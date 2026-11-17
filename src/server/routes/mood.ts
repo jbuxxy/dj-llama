@@ -1,15 +1,19 @@
 import { Hono } from 'hono'
 import { envConfig } from '@/config/env'
-import { createLidarrClient, type LidarrAlbum } from '@/core/clients/lidarr'
+import { getSharedLidarrClient } from '@/core/clients/lidarr'
+import { normalizeAlbumTitle, normalizeArtistName } from '@/core/library/normalize'
 import { buildMoodPrompt } from '@/core/providers/prompt'
 import type { AiProviderRegistry } from '@/core/providers/registry'
 import { errMsg } from '@/core/validation'
+import type { Database } from '@/db'
+import { getLidarrAlbumTitlesByArtist } from '@/db/queries/lidarr-cache'
 import { moodDiscoverSchema } from '@/server/schemas/mood'
 import { zJson } from '@/server/schemas/validator'
 import type { HonoEnv } from '@/server/types'
 import { rankSearchResults, resolveImageUrl, tokenize } from './requests'
 
 export type MoodDeps = {
+  db: Database
   getSettings: () => Promise<Record<string, unknown> | null>
   providerRegistry: AiProviderRegistry
 }
@@ -69,7 +73,7 @@ export function moodRoutes(deps: MoodDeps) {
     >
     if (lidarrUrl && lidarrApiKey) {
       try {
-        const lidarr = createLidarrClient(
+        const lidarr = getSharedLidarrClient(
           lidarrUrl as string,
           lidarrApiKey as string,
           (skipTlsVerify as boolean) ?? false,
@@ -88,29 +92,21 @@ export function moodRoutes(deps: MoodDeps) {
         // album already in Lidarr for that artist counts; a result with no
         // suggestedAlbum (or an artist not in Lidarr at all) can't be
         // checked this way and is left unmarked rather than guessed at.
-        const artists = await lidarr.getArtists()
-        const artistByNameLower = new Map(artists.map((a) => [a.artistName.toLowerCase(), a]))
-        const albumsByArtistId = new Map<number, LidarrAlbum[]>()
+        // Read from the synced library snapshot rather than pulling Lidarr's
+        // entire artist list (and each artist's albums) live per search.
+        const ownedTitles = await getLidarrAlbumTitlesByArtist(
+          deps.db,
+          recs.filter((r) => r.suggestedAlbum).map((r) => normalizeArtistName(r.artistName)),
+        )
 
         results = await Promise.all(
           recs.map(async (r) => {
-            let alreadyOwned = false
-            const artist = artistByNameLower.get(r.artistName.toLowerCase())
-            if (r.suggestedAlbum && artist) {
-              let albums = albumsByArtistId.get(artist.id)
-              if (!albums) {
-                try {
-                  albums = await lidarr.getAlbums(artist.id)
-                } catch {
-                  albums = []
-                }
-                albumsByArtistId.set(artist.id, albums)
-              }
-              const suggestedTitle = r.suggestedAlbum.trim().toLowerCase()
-              alreadyOwned = albums.some(
-                (album) => album.title.trim().toLowerCase() === suggestedTitle,
-              )
-            }
+            const alreadyOwned =
+              !!r.suggestedAlbum &&
+              (ownedTitles
+                .get(normalizeArtistName(r.artistName))
+                ?.has(normalizeAlbumTitle(r.suggestedAlbum)) ??
+                false)
 
             // Cover art: search Lidarr's own metadata-server-backed lookup
             // (works for anything resolvable in MusicBrainz, not just what's

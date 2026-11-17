@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { activityTracker } from '@/core/jobs/activity'
 import type { AlbumCoverage } from '@/core/library/album-coverage'
 import type { LibraryHealthService } from '@/core/library/health'
 import { reconcileFulfillment } from '@/core/library/reconcile-fulfillment'
@@ -126,33 +127,57 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
     const auth = await adminGate(c)
     if (!auth.ok) return auth.response
     const { source } = c.req.valid('json')
-    if (source) {
-      let result = await deps.librarySync.syncSpecificSource(auth.userId, source, { force: true })
-      // Per-user source not configured - retry as a global source. This is safe today because
-      // (a) the route is admin-gated and (b) per-user/global source IDs do not overlap. If a
-      // future source becomes both per-user AND global, restrict this fallback to known-global
-      // IDs to avoid letting per-user calls trigger global syncs they shouldn't reach.
-      if (result.status === 'failed' && result.error.includes(SOURCE_NOT_CONFIGURED_ERROR)) {
-        result = await deps.librarySync.syncSpecificSource(null, source, { force: true })
+    const activity = activityTracker.start(auth.userId, {
+      kind: 'library_sync',
+      label: source ? `Syncing ${source} library` : 'Syncing library',
+      message: 'Starting...',
+    })
+    const syncOptions = {
+      force: true,
+      onProgress: (message: string, item?: { current: number; total: number }) =>
+        activity.update({ message, current: item?.current, total: item?.total }),
+    }
+    const summarize = (results: Array<{ status: string }>) => {
+      const failed = results.filter((r) => r.status === 'failed').length
+      const done = { current: undefined, total: undefined }
+      if (failed > 0)
+        activity.fail(`${failed} source${failed === 1 ? '' : 's'} failed to sync`, done)
+      else activity.done({ ...done, resultSummary: 'Library is up to date' })
+    }
+    try {
+      if (source) {
+        let result = await deps.librarySync.syncSpecificSource(auth.userId, source, syncOptions)
+        // Per-user source not configured - retry as a global source. This is safe today because
+        // (a) the route is admin-gated and (b) per-user/global source IDs do not overlap. If a
+        // future source becomes both per-user AND global, restrict this fallback to known-global
+        // IDs to avoid letting per-user calls trigger global syncs they shouldn't reach.
+        if (result.status === 'failed' && result.error.includes(SOURCE_NOT_CONFIGURED_ERROR)) {
+          result = await deps.librarySync.syncSpecificSource(null, source, syncOptions)
+        }
+        // Manual "Sync now" is also the fastest way for an admin to correct a
+        // request/recommendation that got mislabeled "failed" by a client
+        // timeout when Lidarr actually finished the add moments later (see
+        // reconcileFulfillment) -- otherwise that only self-corrects on the
+        // next scheduled library sync or Plex webhook, which can be hours
+        // away. Best-effort: a reconcile failure shouldn't fail the sync response.
+        await reconcileFulfillment(deps.db, auth.userId).catch((err) =>
+          console.error('[library-sync] reconcileFulfillment failed:', err),
+        )
+        const status = result.status === 'completed' ? 200 : result.status === 'failed' ? 502 : 202
+        summarize([result])
+        return c.json(result, status)
+      } else {
+        const global = await deps.librarySync.syncGlobal(syncOptions)
+        const summary = await deps.librarySync.syncForUser(auth.userId, syncOptions)
+        await reconcileFulfillment(deps.db, auth.userId).catch((err) =>
+          console.error('[library-sync] reconcileFulfillment failed:', err),
+        )
+        summarize([...(global?.results ?? []), ...(summary?.results ?? [])])
+        return c.json(summary, 202)
       }
-      // Manual "Sync now" is also the fastest way for an admin to correct a
-      // request/recommendation that got mislabeled "failed" by a client
-      // timeout when Lidarr actually finished the add moments later (see
-      // reconcileFulfillment) -- otherwise that only self-corrects on the
-      // next scheduled library sync or Plex webhook, which can be hours
-      // away. Best-effort: a reconcile failure shouldn't fail the sync response.
-      await reconcileFulfillment(deps.db, auth.userId).catch((err) =>
-        console.error('[library-sync] reconcileFulfillment failed:', err),
-      )
-      const status = result.status === 'completed' ? 200 : result.status === 'failed' ? 502 : 202
-      return c.json(result, status)
-    } else {
-      await deps.librarySync.syncGlobal({ force: true })
-      const summary = await deps.librarySync.syncForUser(auth.userId, { force: true })
-      await reconcileFulfillment(deps.db, auth.userId).catch((err) =>
-        console.error('[library-sync] reconcileFulfillment failed:', err),
-      )
-      return c.json(summary, 202)
+    } catch (err) {
+      activity.fail(err instanceof Error ? err.message : String(err))
+      throw err
     }
   })
 

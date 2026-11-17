@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import type { ActivityJob } from '@/core/jobs/activity'
 
 export type RealtimeEvent =
   // Something about this user's requests/recommendations/playlists changed
@@ -29,6 +30,13 @@ export type RealtimeEvent =
   // same feed aren't wired to this yet; those still refresh on the existing
   // poll/focus cadence.
   | { type: 'activity-updated' }
+  // A background job for this user (scan, sync, playlist, Lidarr dispatch...)
+  // was queued, progressed, or finished -- see core/jobs/activity.ts. Drives
+  // the header activity indicator and live progress toasts.
+  | { type: 'job'; job: ActivityJob }
+  // Sent once on every (re)connect: the user's current active + recently
+  // finished jobs, so a tab that missed events while disconnected catches up.
+  | { type: 'activity-snapshot'; jobs: ActivityJob[] }
 
 /**
  * Minimal per-user pub/sub for pushing live updates to connected browser

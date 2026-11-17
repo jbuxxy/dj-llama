@@ -15,6 +15,7 @@ import {
   startPlexLogin,
 } from '../lib/api'
 import { consumeQueryFlag, goTopLevel, usesSameTabPlexSignIn } from '../lib/plex-same-tab'
+import { AppSplash } from './app-splash'
 import { Button } from './ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card'
 
@@ -185,7 +186,7 @@ export function AuthGate({ children }: { children: React.ReactNode }) {
     }
   }
 
-  if (state === 'loading') return null
+  if (state === 'loading') return <AppSplash />
   if (state === 'authenticated') return <>{children}</>
   if (state === 'no-music-access') {
     return <NoMusicAccessScreen onRecheck={handleAuthenticated} />

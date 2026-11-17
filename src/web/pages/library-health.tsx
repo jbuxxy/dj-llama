@@ -7,6 +7,7 @@ import { LibraryFirstSyncBanner } from '../components/library-first-sync-banner'
 import { LibrarySourcesPanel } from '../components/library-sources-panel'
 import { LibraryStatsDisplay } from '../components/library-stats'
 import { Skeleton } from '../components/ui/skeleton'
+import { watchJob } from '../lib/activity'
 import {
   fixHealthCheck,
   getLibraryHealth,
@@ -86,6 +87,8 @@ export function LibraryHealthPage({ embedded = false }: { embedded?: boolean }) 
 
   const syncMutation = useMutation({
     mutationFn: async () => {
+      // Live "Syncing library... 120/340 artists" toast via the activity feed.
+      watchJob('library_sync')
       await Promise.all([triggerLibrarySync(), scanLibraryHealth()])
     },
     onSuccess: () => {
@@ -183,8 +186,11 @@ export function LibraryHealthPage({ embedded = false }: { embedded?: boolean }) 
           disabled={scanning || syncMutation.isPending}
           className="flex shrink-0 items-center gap-2 px-3 py-1.5 bg-accent text-accent-fg rounded-md text-sm font-medium hover:opacity-90 disabled:opacity-50 transition-opacity"
         >
-          <RefreshCw size={14} className={scanning ? 'animate-spin' : undefined} />
-          {scanning ? 'Syncing...' : 'Sync now'}
+          <RefreshCw
+            size={14}
+            className={scanning || syncMutation.isPending ? 'animate-spin' : undefined}
+          />
+          {scanning || syncMutation.isPending ? 'Syncing...' : 'Sync now'}
         </button>
       </div>
 

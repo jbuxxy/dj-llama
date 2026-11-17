@@ -36,10 +36,10 @@ import {
   rescanArtists,
   type TasteProfile as TasteProfileData,
   type TopArtistEntry,
-  triggerPipeline,
   updateRecommendation,
 } from '../lib/api'
 import { reportApprovalOutcome } from '../lib/approval'
+import { useStartScan } from '../lib/use-start-scan'
 
 function formatRelativeTime(dateStr: string | Date): string {
   const diffMs = new Date(dateStr).getTime() - Date.now()
@@ -498,6 +498,7 @@ function ActivityFeed({
 }
 
 export function Dashboard() {
+  const scan = useStartScan()
   const queryClient = useQueryClient()
   const [skippedIds, setSkippedIds] = useState<Set<number>>(new Set())
   const [actedIds, setActedIds] = useState<Set<number>>(new Set())
@@ -783,19 +784,7 @@ export function Dashboard() {
           onApprove={(id) => handleAction(id, 'approved')}
           onReject={(id) => handleAction(id, 'rejected')}
           onSkip={handleSkip}
-          onRunScan={() => {
-            triggerPipeline()
-              .then((res) =>
-                toast.success(
-                  res.status === 'duplicate'
-                    ? 'Scan already running'
-                    : res.queued
-                      ? `Scan queued (position ${res.position ?? 0}) - it will start when the current run finishes`
-                      : 'Scan started - check Dashboard for progress',
-                ),
-              )
-              .catch(() => toast.error('Failed to start scan'))
-          }}
+          onRunScan={scan.start}
           targets={approveTargets}
           onApproveToTarget={handleApproveToTarget}
           onApproveWithOption={handleApproveWithOption}

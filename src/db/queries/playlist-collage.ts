@@ -102,3 +102,45 @@ export async function getPlaylistCollages(
   }
   return result
 }
+
+// Collages only change when a playlist's tracks do (i.e. it's regenerated),
+// so cache them keyed on lastGeneratedAt instead of re-joining every track
+// against the library on each /playlists request. A TTL still lets library
+// changes (newly owned albums) show up eventually.
+const COLLAGE_CACHE_TTL_MS = 60 * 60 * 1000
+const COLLAGE_CACHE_MAX = 2000
+const collageCache = new Map<string, { at: number; urls: string[] }>()
+
+export async function getPlaylistCollagesCached(
+  db: Database,
+  userId: number,
+  playlists: Array<{ id: number; lastGeneratedAt: Date | null }>,
+): Promise<Map<number, string[]>> {
+  const result = new Map<number, string[]>()
+  const keyFor = (p: { id: number; lastGeneratedAt: Date | null }) =>
+    `${userId}:${p.id}:${p.lastGeneratedAt?.getTime() ?? 0}`
+  const misses: Array<{ id: number; lastGeneratedAt: Date | null }> = []
+  const now = Date.now()
+  for (const p of playlists) {
+    const hit = collageCache.get(keyFor(p))
+    if (hit && now - hit.at < COLLAGE_CACHE_TTL_MS) result.set(p.id, hit.urls)
+    else misses.push(p)
+  }
+  if (misses.length === 0) return result
+
+  const fresh = await getPlaylistCollages(
+    db,
+    userId,
+    misses.map((p) => p.id),
+  )
+  for (const p of misses) {
+    const urls = fresh.get(p.id) ?? []
+    result.set(p.id, urls)
+    if (collageCache.size >= COLLAGE_CACHE_MAX) {
+      const oldest = collageCache.keys().next().value
+      if (oldest !== undefined) collageCache.delete(oldest)
+    }
+    collageCache.set(keyFor(p), { at: now, urls })
+  }
+  return result
+}

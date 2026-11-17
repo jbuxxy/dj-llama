@@ -27,10 +27,23 @@ function toTrack(t: LfmTrack): LastFmTrack {
  * Last.fm's similar-artists data. Only needs an API key -- no Last.fm account
  * or listening history is involved.
  */
+// Last.fm asks clients to stay under 5 requests/second -- per API key, not per
+// client object. A scan builds two clients for the same key (orchestrator +
+// similarity providers) that run concurrently, so share one gate per key
+// instead of each getting its own 4/s budget (8/s combined).
+const queuesByKey = new Map<string, PQueue>()
+function queueForKey(apiKey: string): PQueue {
+  let queue = queuesByKey.get(apiKey)
+  if (!queue) {
+    queue = new PQueue({ concurrency: 4, interval: 1000, intervalCap: 4 })
+    queuesByKey.set(apiKey, queue)
+  }
+  return queue
+}
+
 export function createLastFmClient(apiKey: string, baseUrl = 'https://ws.audioscrobbler.com/2.0/') {
   const http = createHttpClient({ baseUrl, retries: 1, timeout: 10_000, publicIpOnly: true })
-  // Last.fm asks clients to stay under 5 requests/second.
-  const queue = new PQueue({ concurrency: 4, interval: 1000, intervalCap: 4 })
+  const queue = queueForKey(apiKey)
 
   async function call<T>(params: Record<string, string>): Promise<LfmResponse<T>> {
     const qs = new URLSearchParams({ ...params, api_key: apiKey, format: 'json' })

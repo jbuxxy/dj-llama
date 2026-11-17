@@ -34,6 +34,7 @@ import { SeasonCover } from '../components/season-cover'
 import { SeasonalTrackEditor } from '../components/seasonal-track-editor'
 import { Toggle } from '../components/toggle'
 import { Skeleton } from '../components/ui/skeleton'
+import { watchJob } from '../lib/activity'
 import {
   type AdminImportedPlaylistRow,
   createPlaylistApi,
@@ -1025,8 +1026,8 @@ function ImportPlaylistSection({
       })
       createdId = created.id
       markPlaylistGenerating(queryClient, created.id)
+      watchJob('playlist', String(created.id))
       await generatePlaylistApi(created.id)
-      toast.success('Import started')
       setShowAddDialog(false)
       onChanged()
     } catch (err) {
@@ -1035,22 +1036,28 @@ function ImportPlaylistSection({
     }
   }
 
-  async function handleTogglePush(row: PlaylistRow, autoPushToPlex: boolean) {
+  // Toggles flip instantly (optimistic cache patch) and roll back on failure,
+  // instead of sitting unchanged until the refetch lands.
+  async function patchOptimistically(row: PlaylistRow, patch: Partial<PlaylistRow>) {
+    const previous = queryClient.getQueryData<PlaylistRow[]>(['playlists'])
+    queryClient.setQueryData<PlaylistRow[]>(['playlists'], (old) =>
+      old?.map((p) => (p.id === row.id ? { ...p, ...patch } : p)),
+    )
     try {
-      await updatePlaylistApi(row.id, { autoPushToPlex })
+      await updatePlaylistApi(row.id, patch)
       onChanged()
     } catch {
+      if (previous) queryClient.setQueryData(['playlists'], previous)
       toast.error('Failed to update playlist')
     }
   }
 
+  async function handleTogglePush(row: PlaylistRow, autoPushToPlex: boolean) {
+    await patchOptimistically(row, { autoPushToPlex })
+  }
+
   async function handleToggleSchedule(row: PlaylistRow, enabled: boolean) {
-    try {
-      await updatePlaylistApi(row.id, { schedule: enabled ? scheduleDraft : null })
-      onChanged()
-    } catch {
-      toast.error('Failed to update playlist')
-    }
+    await patchOptimistically(row, { schedule: enabled ? scheduleDraft : null })
   }
 
   async function saveSchedule(row: PlaylistRow, cron: string) {
@@ -1395,6 +1402,7 @@ export function PlaylistsPage() {
         // instead of leaving them to find the "Generate" button on the card.
         if (data.strategy === 'ai_prompt') {
           markPlaylistGenerating(queryClient, created.id)
+          watchJob('playlist', String(created.id))
           generatePlaylistApi(created.id).catch(() => {
             clearPlaylistGenerating(queryClient, created.id)
             toast.error('Failed to start generation')

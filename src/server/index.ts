@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { serveStatic } from '@hono/node-server/serve-static'
 import { Hono } from 'hono'
+import { compress } from 'hono/compress'
 import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { secureHeaders } from 'hono/secure-headers'
@@ -13,6 +14,8 @@ import { adminGuard } from './middleware/admin-guard'
 import { apiVersionRedirect } from './middleware/api-version'
 import { authGuard } from './middleware/auth'
 import { csrfGuard } from './middleware/csrf'
+import { interactiveLane } from './middleware/interactive-lane'
+import { jsonEtag } from './middleware/json-etag'
 import { requestLogger } from './middleware/logger'
 import { rateLimiter } from './middleware/rate-limit'
 import { setupGuard } from './middleware/setup-guard'
@@ -103,6 +106,14 @@ export function createApp(deps: AppDependencies) {
   // Log all requests first - before auth/cors so we capture everything
   app.use('*', requestLogger())
 
+  // gzip JSON/HTML on the fly (SSE and audio are excluded by hono's default
+  // content-type filter; built JS/CSS ship precompressed .br/.gz siblings that
+  // serveStatic picks up below, so they arrive already Content-Encoded and
+  // compress() leaves them alone). ETag for JSON GETs lets the many
+  // react-query refetches of unchanged data come back as bodiless 304s.
+  app.use('*', compress())
+  app.use('/api/v1/*', jsonEtag)
+
   // 308-redirect legacy /api/* to /api/v1/*. Must run before any route is
   // mounted so a legacy request never reaches a handler mounted under
   // /api/v1/*. Emits Deprecation + Sunset headers for RFC 9745/8594 clients.
@@ -171,6 +182,19 @@ export function createApp(deps: AppDependencies) {
   app.use('*', csrfGuard)
   app.use('*', setupGuard(deps.isSetupComplete))
   app.use('*', maintenanceMiddleware)
+
+  // Search/details/request endpoints jump the MusicBrainz queue ahead of
+  // background scans and syncs.
+  for (const path of [
+    '/api/v1/requests',
+    '/api/v1/requests/*',
+    '/api/v1/albums/*',
+    '/api/v1/artists/*',
+    '/api/v1/recommendations/*',
+    '/api/v1/identify',
+  ]) {
+    app.use(path, interactiveLane)
+  }
 
   // Auth status (optional auth - tells the frontend whether auth is required
   // AND whether the caller is already authenticated via session cookie / bearer
@@ -353,6 +377,7 @@ export function createApp(deps: AppDependencies) {
   app.route(
     '/',
     moodRoutes({
+      db: deps.db,
       getSettings: deps.getSettings,
       providerRegistry: deps.providerRegistry,
     }),
@@ -398,8 +423,8 @@ export function createApp(deps: AppDependencies) {
         c.req.path.startsWith('/assets/') ? 'public, max-age=31536000, immutable' : 'no-cache',
       )
     })
-    app.use('/*', serveStatic({ root: webRoot }))
-    app.get('*', serveStatic({ root: webRoot, path: 'index.html' }))
+    app.use('/*', serveStatic({ root: webRoot, precompressed: true }))
+    app.get('*', jsonEtag, serveStatic({ root: webRoot, path: 'index.html', precompressed: true }))
   }
 
   return app
