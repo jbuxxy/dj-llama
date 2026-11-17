@@ -8,6 +8,7 @@ import { dispatch, logDispatchFailures } from '@/core/notifications/registry'
 import type { WebhookPayload } from '@/core/notifications/types'
 import { realtimeBroker } from '@/core/realtime/broker'
 import { searchTrackAlbums } from '@/core/search/track-albums'
+import { dispatchToTargets, isTargetSuccess } from '@/core/targets/dispatch'
 import { errMsg } from '@/core/validation'
 import type { Database } from '@/db'
 import { getArtistImageCacheByMbids } from '@/db/queries/artists'
@@ -25,13 +26,9 @@ import {
 } from '@/db/queries/requests'
 import { libraryAlbums, mergePreferences } from '@/db/schema'
 import type { AppDependencies } from '@/server'
+import { buildAddOptions } from '@/server/helpers/add-options'
 import { notAuthenticated } from '@/server/helpers/auth-problems'
 import { requireAdmin, requireUser } from '@/server/helpers/require-user'
-import {
-  approveAlbumToTargets,
-  approveToTargets,
-  buildAddOptions,
-} from '@/server/routes/recommendations'
 import {
   createRequestSchema,
   listRequestsQuerySchema,
@@ -44,11 +41,6 @@ import { zJson, zParam, zQuery } from '@/server/schemas/validator'
 import type { HonoEnv } from '@/server/types'
 
 type RequestRow = NonNullable<Awaited<ReturnType<typeof getRequestById>>>
-
-const isTargetSuccess = (action: unknown): boolean => {
-  const status = (action as { status?: string } | null)?.status
-  return status === 'added' || status === 'queued'
-}
 
 export async function getLidarrClient(deps: AppDependencies) {
   const settings = await deps.getSettings()
@@ -245,26 +237,19 @@ async function dispatchRequest(
     },
   )
 
-  const result =
+  const result = await dispatchToTargets(
     request.kind === 'album' && request.releaseGroupMbid
-      ? await approveAlbumToTargets(
-          {
-            artistMbid: request.artistMbid,
-            artistName: request.artistName,
-            releaseGroupMbid: request.releaseGroupMbid,
-          },
-          targets,
-          addOptions,
-          deps.jobRecorder,
-          requesterId,
-        )
-      : await approveToTargets(
-          { mbid: request.artistMbid, name: request.artistName },
-          targets,
-          addOptions,
-          deps.jobRecorder,
-          requesterId,
-        )
+      ? {
+          kind: 'album',
+          artistMbid: request.artistMbid,
+          artistName: request.artistName,
+          releaseGroupMbid: request.releaseGroupMbid,
+        }
+      : { kind: 'artist', mbid: request.artistMbid, name: request.artistName },
+    targets,
+    addOptions,
+    { jobRecorder: deps.jobRecorder, userId: requesterId },
+  )
 
   const anySuccess = Object.values(result.targetActions).some(isTargetSuccess)
   return { status: anySuccess ? 'dispatched' : 'failed', targetActions: result.targetActions }

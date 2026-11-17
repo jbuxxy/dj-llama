@@ -1,4 +1,4 @@
-import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
+import { dispatchToTargets } from '@/core/targets/dispatch'
 import type { DestinationTarget, TargetAddOptions } from '@/core/targets/types'
 import type { StatusUpdateExtra } from '@/db/queries/recommendations'
 
@@ -19,7 +19,6 @@ export type AutoApproveDeps = {
     status: string,
     extra?: StatusUpdateExtra,
   ) => Promise<void>
-  warmArtist?: (mbid: string) => Promise<void>
   jobRecorder?: import('@/core/jobs/types').JobRecorder
   userId?: number
 }
@@ -47,7 +46,6 @@ export async function autoApprove(
   if (eligible.length === 0) return { approved: 0, failed: 0 }
 
   const targets = await deps.getEnabledTargets()
-  const hasLidarr = targets.some((t) => t.type === 'lidarr')
   const albumOnly = config.monitorOption === 'recommended'
 
   const addOptions: TargetAddOptions = {
@@ -61,110 +59,35 @@ export async function autoApprove(
   let failed = 0
 
   for (const rec of eligible) {
-    // Pre-warm SkyHook if Lidarr target exists
-    if (deps.warmArtist && hasLidarr) {
-      await deps.warmArtist(rec.artist.mbid).catch(() => {})
-    }
-
     const releaseGroupMbid = albumOnly ? rec.recommendedReleaseGroupId : null
-    const addTargets = targets.filter((t) =>
-      t.capabilities?.includes(releaseGroupMbid ? 'addAlbum' : 'addArtist'),
-    )
-
-    if (addTargets.length === 0) {
+    const capability = releaseGroupMbid ? 'addAlbum' : 'addArtist'
+    if (!targets.some((t) => t.capabilities?.includes(capability))) {
       // No targets - mark as approved (discovery-only)
       await deps.updateRecommendationStatus(rec.id, 'approved', { targetActions: {} })
       approved++
       continue
     }
 
-    const targetActions: Record<string, unknown> = {}
-    let anySuccess = false
-    let lidarrResult: {
-      success: boolean
-      externalId?: number | string
-      error?: string
-    } | null = null
+    const result = await dispatchToTargets(
+      releaseGroupMbid
+        ? {
+            kind: 'album',
+            artistMbid: rec.artist.mbid,
+            artistName: rec.artist.name,
+            releaseGroupMbid,
+          }
+        : { kind: 'artist', mbid: rec.artist.mbid, name: rec.artist.name },
+      targets,
+      addOptions,
+      { jobRecorder: deps.jobRecorder, userId: deps.userId, recommendationId: rec.id },
+    )
 
-    for (const target of addTargets) {
-      const targetJobId = deps.jobRecorder
-        ? await deps.jobRecorder.start({
-            type: 'target',
-            userId: deps.userId,
-            metadata: {
-              targetType: target.type,
-              artistName: rec.artist.name,
-              mbid: rec.artist.mbid,
-              ...(releaseGroupMbid ? { releaseGroupMbid, action: 'addAlbum' } : { action: 'add' }),
-            },
-          })
-        : null
-
-      const result = releaseGroupMbid
-        ? await target.addAlbum?.(
-            { artistMbid: rec.artist.mbid, artistName: rec.artist.name, releaseGroupMbid },
-            { ...addOptions, userId: deps.userId, recommendationId: rec.id },
-          )
-        : await target.addArtist?.({ mbid: rec.artist.mbid, name: rec.artist.name }, addOptions)
-
-      if (!result) {
-        if (targetJobId != null && deps.jobRecorder) {
-          await deps.jobRecorder.complete(targetJobId, {
-            metadata: { targetType: target.type, artistName: rec.artist.name, skipped: true },
-          })
-        }
-        continue
-      }
-
-      targetActions[target.id] = {
-        status: result.success ? 'added' : 'failed',
-        externalId: result.externalId,
-        error: result.error,
-      }
-      if (result.success) anySuccess = true
-      if (target.type === 'lidarr') lidarrResult = result
-
-      if (targetJobId != null && deps.jobRecorder) {
-        if (result.success) {
-          await deps.jobRecorder.complete(targetJobId, {
-            metadata: {
-              targetType: target.type,
-              artistName: rec.artist.name,
-              externalId: result.externalId,
-            },
-          })
-        } else {
-          await recordFailureSafely(
-            deps.jobRecorder,
-            targetJobId,
-            result.error ?? 'Target returned failure',
-          )
-        }
-      }
-    }
-
-    const extra: StatusUpdateExtra = { targetActions }
-    if (lidarrResult) {
-      // The album path returns a Lidarr ALBUM id -- wrong for lidarrArtistId
-      // (it stays in targetActions instead), matching approveAlbumToTargets.
-      if (lidarrResult.externalId && !releaseGroupMbid)
-        extra.lidarrArtistId = lidarrResult.externalId as number
-      if (lidarrResult.error) extra.lidarrError = lidarrResult.error
-    }
-
-    const lidarrSucceeded = lidarrResult?.success === true
-    const lidarrFailed = hasLidarr && lidarrResult != null && !lidarrResult.success
-    const finalStatus = lidarrSucceeded
-      ? 'added_to_lidarr'
-      : lidarrFailed
-        ? 'add_failed'
-        : anySuccess
-          ? 'approved'
-          : 'add_failed'
-
-    await deps.updateRecommendationStatus(rec.id, finalStatus, extra)
-    if (anySuccess) approved++
-    else failed++
+    const extra: StatusUpdateExtra = { targetActions: result.targetActions }
+    if (result.lidarrArtistId) extra.lidarrArtistId = result.lidarrArtistId as number
+    if (result.lidarrError) extra.lidarrError = result.lidarrError
+    await deps.updateRecommendationStatus(rec.id, result.status, extra)
+    if (result.status === 'add_failed') failed++
+    else approved++
   }
 
   return { approved, failed }

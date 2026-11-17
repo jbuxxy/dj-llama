@@ -20,18 +20,21 @@ vi.mock('@/db/queries/requests', () => ({
   resolveRequest: vi.fn(),
 }))
 
-vi.mock('@/server/routes/recommendations', () => ({
-  approveAlbumToTargets: vi.fn(),
-  approveToTargets: vi.fn(),
+vi.mock('@/server/helpers/add-options', () => ({
   buildAddOptions: vi.fn(),
 }))
+
+vi.mock('@/core/targets/dispatch', async () => {
+  const actual =
+    await vi.importActual<typeof import('@/core/targets/dispatch')>('@/core/targets/dispatch')
+  return { ...actual, dispatchToTargets: vi.fn() }
+})
 
 const { createMusicBrainzClient } = await import('@/core/clients/musicbrainz')
 const { getRequestById, listFailedOpenRequests, resolvePendingRequest, resolveRequest } =
   await import('@/db/queries/requests')
-const { approveAlbumToTargets, approveToTargets, buildAddOptions } = await import(
-  '@/server/routes/recommendations'
-)
+const { buildAddOptions } = await import('@/server/helpers/add-options')
+const { dispatchToTargets } = await import('@/core/targets/dispatch')
 const { requestRoutes } = await import('@/server/routes/requests')
 
 const ARTIST_MBID = 'a74b1b7f-71a5-4011-9441-d0b5e4122711'
@@ -79,8 +82,7 @@ function makeApp(deps: ReturnType<typeof makeDeps>) {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(buildAddOptions).mockResolvedValue({})
-  vi.mocked(approveToTargets).mockResolvedValue({ targetActions: {} } as never)
-  vi.mocked(approveAlbumToTargets).mockResolvedValue({ targetActions: {} } as never)
+  vi.mocked(dispatchToTargets).mockResolvedValue({ targetActions: {} } as never)
 })
 
 describe('POST /api/v1/requests/:id/approve - whole-discography album-type restriction', () => {
@@ -167,7 +169,7 @@ describe('POST /api/v1/requests/retry-failed', () => {
       requestRow({ id: 10, kind: 'album', releaseGroupMbid: 'rg-1', status: 'failed' }),
       requestRow({ id: 11, kind: 'album', releaseGroupMbid: 'rg-2', status: 'failed' }),
     ] as never)
-    vi.mocked(approveAlbumToTargets)
+    vi.mocked(dispatchToTargets)
       .mockResolvedValueOnce({ targetActions: { lidarr: { status: 'added' } } } as never)
       .mockResolvedValueOnce({ targetActions: { lidarr: { status: 'failed' } } } as never)
 

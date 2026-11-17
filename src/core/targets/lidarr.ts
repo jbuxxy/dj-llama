@@ -23,6 +23,11 @@ export type LidarrTargetConfig = {
   // Skipped entirely (not just returning nulls) when omitted, so callers
   // that don't have a DB handle (tests, other target instantiations) keep
   // the original always-live behavior.
+  /**
+   * Pre-warms Lidarr's SkyHook metadata cache for an artist before adding it,
+   * so the add doesn't fail on a cold lookup. Best-effort.
+   */
+  warmArtist?: (mbid: string) => Promise<void>
   lookupCachedIds?: (
     artistMbid: string,
     albumMbid: string,
@@ -67,6 +72,7 @@ export function createLidarrTarget(
         options?.monitorOption === 'selected' ? 'none' : (options?.monitorOption ?? 'none')
 
       try {
+        await config.warmArtist?.(artist.mbid).catch(() => {})
         const added = await client.addArtist(
           artist.mbid,
           artist.name,
@@ -143,6 +149,7 @@ export function createLidarrTarget(
         }
 
         if (!artistId) {
+          await config.warmArtist?.(album.artistMbid).catch(() => {})
           const added = await client.addArtist(
             album.artistMbid,
             album.artistName,

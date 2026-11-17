@@ -78,6 +78,7 @@ import { createDefaultRegistry } from './core/providers/registry'
 import { realtimeBroker } from './core/realtime/broker'
 import { searchTrackAlbums } from './core/search/track-albums'
 import { setSessionStore } from './core/sessions'
+import { dispatchToTargets, isTargetSuccess } from './core/targets/dispatch'
 import { createLidarrTarget } from './core/targets/lidarr'
 import {
   normalize as normalizeForMatch,
@@ -208,7 +209,6 @@ import { waitForDatabase } from './db/wait'
 import { type AppDependencies, createApp } from './server'
 import { buildPipelineRun } from './server/helpers/pipeline-run'
 import { resolveUserPreferences } from './server/helpers/preferences'
-import { approveAlbumToTargets } from './server/routes/recommendations'
 
 // Job recording - initialized after DB setup, before createApp()
 let jobRecorder: import('./core/jobs/types').JobRecorder
@@ -637,6 +637,7 @@ function getCachedOrFreshLidarrTarget(
 
   const target = createLidarrTarget(config.id, {
     ...config,
+    warmArtist: (mbid) => skyhookWarmer.warm(mbid),
     lookupCachedIds: (artistMbid, albumMbid) => getCachedLidarrIds(db, artistMbid, albumMbid),
   })
   cachedLidarrTarget = { key, builtAt: Date.now(), target }
@@ -1406,21 +1407,18 @@ async function autoRequestMissingPlaylistTracks(
       }
 
       const targets = await getEnabledTargets()
-      const result = await approveAlbumToTargets(
+      const result = await dispatchToTargets(
         {
+          kind: 'album',
           artistMbid: requestRow.artistMbid,
           artistName: requestRow.artistName,
           releaseGroupMbid: requestRow.releaseGroupMbid as string,
         },
         targets,
         addOptions,
-        jobRecorder,
-        ownerId,
+        { jobRecorder, userId: ownerId },
       )
-      const anySuccess = Object.values(result.targetActions).some((action) => {
-        const status = (action as { status?: string } | null)?.status
-        return status === 'added' || status === 'queued'
-      })
+      const anySuccess = Object.values(result.targetActions).some(isTargetSuccess)
       await resolveRequest(db, requestRow.id, {
         status: anySuccess ? 'dispatched' : 'failed',
         targetActions: result.targetActions,

@@ -25,7 +25,6 @@ function makeDeps(overrides: Partial<AutoApproveDeps> = {}): AutoApproveDeps {
       },
     ]),
     updateRecommendationStatus: vi.fn(),
-    warmArtist: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   }
 }
