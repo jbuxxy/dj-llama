@@ -8,7 +8,7 @@ import {
 import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
 import { RecommendationStreamParser } from './stream-parse'
-import { timeoutMessage, timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
+import { timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const DEFAULT_TIMEOUT_SECONDS = 60
@@ -165,37 +165,34 @@ export class OpenAICompatibleProvider implements RecommendationProvider {
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
+      return await withTimeout(
+        this.timeoutMs,
+        'OpenAI-Compatible connection test',
+        async (signal) => {
+          const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+          if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
-      const res = await fetch(this.chatCompletionsUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: this.model,
-          messages: [{ role: 'user', content: 'ping' }],
-          max_completion_tokens: 10,
-        }),
-        signal: controller.signal,
-      })
+          const res = await fetch(this.chatCompletionsUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: this.model,
+              messages: [{ role: 'user', content: 'ping' }],
+              max_completion_tokens: 10,
+            }),
+            signal: signal,
+          })
 
-      if (res.ok) {
-        return { success: true, message: `Connected to ${this.baseUrl} (${this.model})` }
-      }
-      const body = await res.text().catch(() => '')
-      return { success: false, message: body || `HTTP ${res.status}` }
+          if (res.ok) {
+            return { success: true, message: `Connected to ${this.baseUrl} (${this.model})` }
+          }
+          const body = await res.text().catch(() => '')
+          return { success: false, message: body || `HTTP ${res.status}` }
+        },
+      )
     } catch (err: unknown) {
-      return {
-        success: false,
-        message: controller.signal.aborted
-          ? timeoutMessage('OpenAI-Compatible connection test', this.timeoutMs)
-          : errMsg(err),
-      }
-    } finally {
-      clearTimeout(timer)
+      return { success: false, message: errMsg(err) }
     }
   }
 }

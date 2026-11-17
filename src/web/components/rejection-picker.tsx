@@ -21,7 +21,7 @@ export function RejectionPicker({ open, onClose, onSubmit, artistName }: Props) 
   const titleId = useId()
   const [reason, setReason] = useState<RejectionReason | null>(null)
   const [reasonText, setReasonText] = useState('')
-  const [permanentChoice, setPermanent] = useState(false)
+  const [permanent, setPermanent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const firstRadioRef = useRef<HTMLButtonElement | null>(null)
 
@@ -36,10 +36,6 @@ export function RejectionPicker({ open, onClose, onSubmit, artistName }: Props) 
       requestAnimationFrame(() => firstRadioRef.current?.focus())
     }
   }, [open])
-
-  // not_right_now is incompatible with permanent, so that reason always
-  // switches the flag off.
-  const permanent = permanentChoice && reason !== 'not_right_now'
 
   useEffect(() => {
     if (!open) return
@@ -102,7 +98,12 @@ export function RejectionPicker({ open, onClose, onSubmit, artistName }: Props) 
                 ref={i === 0 ? firstRadioRef : undefined}
                 type="button"
                 aria-pressed={reason === r}
-                onClick={() => setReason(r)}
+                onClick={() => {
+                  setReason(r)
+                  // not_right_now is incompatible with permanent: clear the
+                  // flag so it doesn't come back if the user switches again.
+                  if (r === 'not_right_now') setPermanent(false)
+                }}
                 className={`text-left px-3 py-2 rounded-md border text-sm transition-colors ${
                   reason === r
                     ? 'bg-accent/10 border-accent text-text'

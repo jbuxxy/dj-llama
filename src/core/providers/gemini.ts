@@ -170,34 +170,32 @@ export class GeminiProvider implements RecommendationProvider {
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
     try {
-      const res = await fetch(`${API_BASE}/${this.model}:generateContent`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-goog-api-key': this.apiKey,
-        },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: 'ping' }] }],
-          generationConfig: { maxOutputTokens: 10 },
-        }),
-        signal: controller.signal,
-      })
+      return await withTimeout(10_000, 'Gemini connection test', async (signal) => {
+        const res = await fetch(`${API_BASE}/${this.model}:generateContent`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': this.apiKey,
+          },
+          body: JSON.stringify({
+            contents: [{ parts: [{ text: 'ping' }] }],
+            generationConfig: { maxOutputTokens: 10 },
+          }),
+          signal: signal,
+        })
 
-      if (res.ok) {
-        return { success: true, message: `Connected to Gemini (${this.model})` }
-      }
-      const body = await res.text().catch(() => '')
-      return { success: false, message: body || `HTTP ${res.status}` }
+        if (res.ok) {
+          return { success: true, message: `Connected to Gemini (${this.model})` }
+        }
+        const body = await res.text().catch(() => '')
+        return { success: false, message: body || `HTTP ${res.status}` }
+      })
     } catch (err: unknown) {
       return {
         success: false,
         message: errMsg(err),
       }
-    } finally {
-      clearTimeout(timer)
     }
   }
 }

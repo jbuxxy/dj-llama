@@ -136,43 +136,41 @@ export class OllamaProvider implements RecommendationProvider {
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 10_000)
     try {
-      const response = await fetch(`${this.baseUrl}/api/tags`, {
-        signal: controller.signal,
+      return await withTimeout(10_000, 'Ollama connection test', async (signal) => {
+        const response = await fetch(`${this.baseUrl}/api/tags`, {
+          signal: signal,
+        })
+
+        if (!response.ok) {
+          return {
+            success: false,
+            message: `Ollama returned ${response.status} ${response.statusText}`,
+          }
+        }
+
+        const data = (await response.json()) as OllamaTagsResponse
+        const models = data.models?.map((m) => m.name) ?? []
+
+        // Ollama treats a tagless name as ":latest", so "llama3" must match a
+        // pulled "llama3:latest" - compare both the full name and the base name.
+        const available = models.some(
+          (name) => name === this.model || name.split(':')[0] === this.model,
+        )
+        if (!available) {
+          return {
+            success: false,
+            message: `Connected to Ollama, but model "${this.model}" is not available (${models.length} model(s) installed). Pull it first: ollama pull ${this.model}`,
+          }
+        }
+
+        return {
+          success: true,
+          message: `Connected to Ollama - model "${this.model}" is available (${models.length} model(s) installed)`,
+        }
       })
-
-      if (!response.ok) {
-        return {
-          success: false,
-          message: `Ollama returned ${response.status} ${response.statusText}`,
-        }
-      }
-
-      const data = (await response.json()) as OllamaTagsResponse
-      const models = data.models?.map((m) => m.name) ?? []
-
-      // Ollama treats a tagless name as ":latest", so "llama3" must match a
-      // pulled "llama3:latest" - compare both the full name and the base name.
-      const available = models.some(
-        (name) => name === this.model || name.split(':')[0] === this.model,
-      )
-      if (!available) {
-        return {
-          success: false,
-          message: `Connected to Ollama, but model "${this.model}" is not available (${models.length} model(s) installed). Pull it first: ollama pull ${this.model}`,
-        }
-      }
-
-      return {
-        success: true,
-        message: `Connected to Ollama - model "${this.model}" is available (${models.length} model(s) installed)`,
-      }
     } catch (err: unknown) {
       return { success: false, message: errMsg(err) }
-    } finally {
-      clearTimeout(timer)
     }
   }
 }

@@ -260,7 +260,9 @@ export function createMusicBrainzClient() {
         await sleep(backoff)
         lastErr = new MusicBrainzHttpError(res.status, path)
       } catch (err) {
-        // Network/timeout errors are retryable. The final attempt rethrows.
+        // HTTP statuses were classified above; only network/timeout errors
+        // get here as retryable. The final attempt rethrows.
+        if (err instanceof MusicBrainzHttpError) throw err
         const retryable =
           err instanceof Error &&
           (err.name === 'AbortError' ||
@@ -318,11 +320,12 @@ export function createMusicBrainzClient() {
   // is the correct way to find a specific Compilation/Live release-group:
   // scoping the query by title too keeps the result set small regardless of
   // how bootlegged the artist's catalog is.
-  // Resolution asks for the same artist's catalog more than once (AI-title
-  // match, then the fallback album pick; reconciler passes) -- each a full
-  // rate-limited MB slot. Memoized like lookupArtist; callers get a copy so
+  // Resolution asks for the same artist's catalog more than once within a
+  // run (AI-title match, then the fallback album pick; reconciler passes) --
+  // each a full rate-limited MB slot. Memoized briefly (10 min, so a forced
+  // resync still sees newly released albums soon); callers get a copy so
   // none can reorder the cached list in place.
-  const releaseGroupMemo = new TtlCache<MBReleaseGroup[]>(6 * 60 * 60 * 1000, 2000)
+  const releaseGroupMemo = new TtlCache<MBReleaseGroup[]>(10 * 60 * 1000, 2000)
   async function getReleaseGroups(
     artistMbid: string,
     types: readonly string[] = ['Album', 'EP'],

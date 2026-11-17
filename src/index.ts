@@ -834,19 +834,30 @@ async function albumHasTrack(
 //
 // Each call used to re-list the artist's albums and every album's tracks, so
 // a playlist missing several songs by one artist repeated the same Lidarr
-// calls per song. The checker caches each artist's downloaded titles for the
-// lifetime of one run.
+// calls per song. The checker caches album lists and per-album titles for
+// one run, and still stops at the first album that has the song.
 function createExistingTrackFileChecker(lidarr: ReturnType<typeof createLidarrClient>) {
-  const downloadedTitles = new Map<number, Promise<Set<string>>>()
+  // Only successful lookups are cached: a Lidarr hiccup shouldn't make every
+  // later track by that artist look "not downloaded" for the rest of the run.
+  const albumsByArtist = new Map<number, LidarrAlbum[]>()
+  const titlesByAlbum = new Map<number, Set<string>>()
 
-  async function loadDownloadedTitles(lidarrArtistId: number): Promise<Set<string>> {
-    const titles = new Set<string>()
-    const albums = await lidarr.getAlbums(lidarrArtistId).catch(() => [])
-    for (const album of albums) {
-      if (!album.statistics?.trackFileCount) continue
-      const tracks = await lidarr.getTracks(album.id).catch(() => [])
-      for (const t of tracks) if (t.hasFile) titles.add(normalizeForMatch(t.title))
-    }
+  async function albumsWithFiles(lidarrArtistId: number): Promise<LidarrAlbum[]> {
+    const cached = albumsByArtist.get(lidarrArtistId)
+    if (cached) return cached
+    const albums = (await lidarr.getAlbums(lidarrArtistId)).filter(
+      (a) => a.statistics?.trackFileCount,
+    )
+    albumsByArtist.set(lidarrArtistId, albums)
+    return albums
+  }
+
+  async function downloadedTitles(albumId: number): Promise<Set<string>> {
+    const cached = titlesByAlbum.get(albumId)
+    if (cached) return cached
+    const tracks = await lidarr.getTracks(albumId)
+    const titles = new Set(tracks.filter((t) => t.hasFile).map((t) => normalizeForMatch(t.title)))
+    titlesByAlbum.set(albumId, titles)
     return titles
   }
 
@@ -854,16 +865,16 @@ function createExistingTrackFileChecker(lidarr: ReturnType<typeof createLidarrCl
     lidarrArtistId: number,
     trackName: string,
   ): Promise<boolean> {
-    let pending = downloadedTitles.get(lidarrArtistId)
-    if (!pending) {
-      pending = loadDownloadedTitles(lidarrArtistId)
-      downloadedTitles.set(lidarrArtistId, pending)
-    }
-    const titles = await pending
     const stripped = stripSearchQualifier(trackName)
-    if (titles.has(normalizeForMatch(stripped))) return true
+    const target = normalizeForMatch(stripped)
     const genericStripped = stripTrailingParenthetical(stripped)
-    return genericStripped !== stripped && titles.has(normalizeForMatch(genericStripped))
+    const targetGeneric = genericStripped !== stripped ? normalizeForMatch(genericStripped) : null
+    const albums = await albumsWithFiles(lidarrArtistId).catch(() => [])
+    for (const album of albums) {
+      const titles = await downloadedTitles(album.id).catch(() => new Set<string>())
+      if (titles.has(target) || (targetGeneric !== null && titles.has(targetGeneric))) return true
+    }
+    return false
   }
 }
 

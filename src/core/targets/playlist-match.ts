@@ -120,7 +120,7 @@ export function stripTrailingParenthetical(trackName: string): string {
 // Exported (unlike the rest of this module's normalization helpers) so
 // callers outside Plex matching -- e.g. checking whether Lidarr already has
 // a *plain* studio file for a track, not just one whose parenthetical-
-// stripped title happens to match (see index.ts's findExistingTrackFile) --
+// stripped title happens to match (see index.ts's createExistingTrackFileChecker) --
 // can use the same "exact modulo diacritics/case/punctuation-style" strictness.
 // Deliberately does NOT strip parentheticals the way normalizeTrackTitle
 // (core/library/normalize.ts) does: a remix/instrumental/live qualifier

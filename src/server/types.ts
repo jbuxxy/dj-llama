@@ -10,6 +10,5 @@ export type HonoEnv = {
     userId?: number
     authMethod?: AuthMethod
     legacyTokenAuth?: boolean
-    /** True when auth middleware determined no auth is configured (no users, no legacy token). */
   }
 }

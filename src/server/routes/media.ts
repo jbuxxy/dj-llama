@@ -33,10 +33,14 @@ export function mediaRoutes(deps: AppDependencies) {
     }
 
     try {
+      // The 10s limit covers getting the response headers only; the body is
+      // streamed to the client afterwards and may legitimately take longer.
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10_000)
       const upstream = await fetch(url.href, {
         redirect: 'manual',
-        signal: AbortSignal.timeout(10_000),
-      })
+        signal: controller.signal,
+      }).finally(() => clearTimeout(timer))
       if (!upstream.ok) return c.json({ error: 'Upstream fetch failed' }, 502)
       const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream'
       if (!contentType.startsWith('image/')) {

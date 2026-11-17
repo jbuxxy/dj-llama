@@ -7,16 +7,16 @@ export function useClickOutside(
 ) {
   useEffect(() => {
     if (!active) return
-    function handleClick(e: PointerEvent) {
+    function handleClick(e: MouseEvent) {
       if (ref.current && !ref.current.contains(e.target as Node)) onClose()
     }
     function handleKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose()
     }
-    document.addEventListener('pointerdown', handleClick)
+    document.addEventListener('mousedown', handleClick)
     document.addEventListener('keydown', handleKey)
     return () => {
-      document.removeEventListener('pointerdown', handleClick)
+      document.removeEventListener('mousedown', handleClick)
       document.removeEventListener('keydown', handleKey)
     }
   }, [active, onClose, ref])
