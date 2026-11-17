@@ -3,6 +3,7 @@ import { ArrowLeft, Disc3 } from 'lucide-react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errMsg } from '@/core/validation'
+import { queryKeys } from '@/web/lib/query-keys'
 import { Button } from '../components/ui/button'
 import { createRequest, getRequestAlbumDetail } from '../lib/api'
 
@@ -27,7 +28,7 @@ export function AlbumDetailsPage() {
   const submit = useMutation({
     mutationFn: createRequest,
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(
         result.status === 'dispatched'
           ? 'Request sent to Lidarr'

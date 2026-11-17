@@ -3,6 +3,7 @@ import { ChevronDown } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
+import { queryKeys } from '@/web/lib/query-keys'
 import { AlbumPicker } from '../components/album-picker'
 import { ArtistThumb } from '../components/artist-thumb'
 import { GenreCoverageSummary } from '../components/genre-coverage-summary'
@@ -500,14 +501,14 @@ export function Dashboard() {
 
   // Pending pick - fetch 10 so skip has runway
   const { data: pickData, isLoading: pickLoading } = useQuery({
-    queryKey: ['dashboard-pick'],
+    queryKey: queryKeys.dashboard.pick,
     queryFn: () => getRecommendations({ status: 'pending', sort: 'score_desc', limit: '10' }),
     staleTime: 30_000,
   })
 
   // Recently approved
   const { data: approvedData, isLoading: approvedLoading } = useQuery({
-    queryKey: ['dashboard-approved'],
+    queryKey: queryKeys.dashboard.approved,
     queryFn: () =>
       getRecommendations({
         status: 'added_to_lidarr,add_failed,approved',
@@ -522,7 +523,7 @@ export function Dashboard() {
   // `recommendations`), so getRecommendations above never sees them. Pull
   // recent request history and merge the dispatched ones in below.
   const { data: approvedRequestsData, isLoading: approvedRequestsLoading } = useQuery({
-    queryKey: ['dashboard-approved-requests'],
+    queryKey: queryKeys.requests.mineRecent,
     queryFn: async () => (await listMyRequests({ limit: '24' })).items,
     staleTime: 30_000,
   })
@@ -533,7 +534,7 @@ export function Dashboard() {
   // state) every time the range or page changes -- isFetching drives a
   // small progress indicator instead.
   const { data: topArtistsData, isFetching: topArtistsFetching } = useQuery({
-    queryKey: ['dashboard-top-artists', listenRange, listenPage, LISTENING_PAGE_SIZE],
+    queryKey: queryKeys.dashboard.topArtists(listenRange, listenPage, LISTENING_PAGE_SIZE),
     queryFn: () =>
       getTopArtists(listenRange, listenPage * LISTENING_PAGE_SIZE, LISTENING_PAGE_SIZE),
     staleTime: 30_000,
@@ -542,7 +543,7 @@ export function Dashboard() {
 
   // Recent activity (latest scrobbles) -- same range as top-artists above
   const { data: recentTracksData, isFetching: recentTracksFetching } = useQuery({
-    queryKey: ['dashboard-recent-tracks', listenRange, recentPage, LISTENING_PAGE_SIZE],
+    queryKey: queryKeys.dashboard.recentTracks(listenRange, recentPage, LISTENING_PAGE_SIZE),
     queryFn: () =>
       getRecentTracks(listenRange, recentPage * LISTENING_PAGE_SIZE, LISTENING_PAGE_SIZE),
     staleTime: 30_000,
@@ -551,20 +552,20 @@ export function Dashboard() {
 
   // Taste
   const { data: tasteData, isLoading: tasteLoading } = useQuery({
-    queryKey: ['dashboard-taste'],
+    queryKey: queryKeys.dashboard.taste,
     queryFn: getDashboardTaste,
     staleTime: 30_000,
   })
 
   const { data: genreCoverageData } = useQuery({
-    queryKey: ['dashboard-genre-coverage'],
+    queryKey: queryKeys.dashboard.genreCoverage,
     queryFn: getDashboardGenreCoverage,
     staleTime: 30_000,
   })
 
   // Activity
   const { data: activityData, isLoading: activityLoading } = useQuery({
-    queryKey: ['dashboard-activity'],
+    queryKey: queryKeys.dashboard.activity,
     queryFn: () => getDashboardActivity(5),
     staleTime: 30_000,
   })
@@ -596,8 +597,7 @@ export function Dashboard() {
       rescannedRef.current = true
       rescanArtists()
         .then(() => {
-          queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-          queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
         })
         .catch(() => {})
     }
@@ -657,9 +657,9 @@ export function Dashboard() {
       if (reportApprovalOutcome(res)) {
         toast.success(status === 'approved' ? 'Approved' : 'Rejected')
       }
-      queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.pick })
       if (status === 'approved') {
-        queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+        queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.approved })
       }
     } catch {
       toast.error('Failed')
@@ -681,8 +681,7 @@ export function Dashboard() {
     try {
       const res = await approveRecommendation(recId, { monitorOption })
       if (reportApprovalOutcome(res)) toast.success('Approved')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
     } catch {
       toast.error('Failed')
       setActedIds((prev) => {
@@ -701,8 +700,7 @@ export function Dashboard() {
         expandToDiscography: true,
       })
       if (reportApprovalOutcome(res)) toast.success('Approved')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
     } catch {
       toast.error('Failed')
       setActedIds((prev) => {
@@ -727,8 +725,7 @@ export function Dashboard() {
     try {
       const res = await approveToTarget(recId, targetId)
       if (reportApprovalOutcome(res)) toast.success('Sent to target')
-      queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
     } catch {
       toast.error('Failed to approve')
     } finally {
@@ -750,10 +747,9 @@ export function Dashboard() {
       {/* Pipeline progress (self-hides) */}
       <PipelineProgress
         onComplete={() => {
-          queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-          queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
-          queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
-          queryClient.invalidateQueries({ queryKey: ['dashboard-genre-coverage'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.activity })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.genreCoverage })
         }}
         isFirstScan={
           (!pickData || pickData.items.length === 0) &&
@@ -877,8 +873,7 @@ export function Dashboard() {
                     selectedAlbumIds,
                   })
                   if (reportApprovalOutcome(res)) toast.success('Approved')
-                  queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-                  queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
+                  queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.recs })
                 } catch {
                   toast.error('Failed')
                 } finally {

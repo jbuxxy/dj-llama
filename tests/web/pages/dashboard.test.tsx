@@ -324,7 +324,7 @@ describe('Dashboard', () => {
 
     fireEvent.click(screen.getByTestId('complete-pipeline'))
 
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['dashboard-genre-coverage'] })
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ['dashboard', 'genre-coverage'] })
   })
 
   it('renders activity feed entries', async () => {

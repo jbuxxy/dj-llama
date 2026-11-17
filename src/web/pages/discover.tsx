@@ -11,6 +11,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import type { RejectionReason } from '@/core/recommendations/rejection-reasons'
+import { queryKeys } from '@/web/lib/query-keys'
 import { JobProgressBar } from '../components/activity-center'
 import { AlbumApprove } from '../components/album-approve'
 import { AlbumPicker } from '../components/album-picker'
@@ -562,20 +563,20 @@ export function DiscoverPage() {
   const [activeDecades, setActiveDecades] = useState<Set<Decade>>(new Set())
 
   const refetch = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['recommendations'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.recommendations.all })
   }, [queryClient])
 
-  // Flips a recommendation's status in every cached ['recommendations', ...]
-  // list query the instant Approve is clicked, so the card's buttons
-  // disappear right away instead of sitting disabled for the full round
-  // trip to Lidarr (which can take a few seconds -- see approveToTargets in
-  // server/routes/recommendations.ts). refetch() below reconciles with the
+  // Flips a recommendation's status in every cached recommendation list
+  // (Discover pages and the Dashboard widgets) the instant Approve is
+  // clicked, so the card's buttons disappear right away instead of sitting
+  // disabled for the full round trip to Lidarr (which can take a few
+  // seconds -- see core/targets/dispatch.ts). refetch() below reconciles with the
   // real outcome (added_to_lidarr/add_failed) once the request actually
   // finishes; returns a rollback to call if the request fails.
   const optimisticallyMarkStatus = useCallback(
     (id: number, status: string): (() => void) => {
       const queries = queryClient.getQueriesData<{ items: Recommendation[]; total: number }>({
-        queryKey: ['recommendations'],
+        queryKey: queryKeys.recommendations.all,
       })
       const snapshots: Array<[readonly unknown[], unknown]> = []
       for (const [key, data] of queries) {
@@ -632,7 +633,11 @@ export function DiscoverPage() {
   if (decadesParam) queryParams.decades = decadesParam
 
   const { data, isLoading: loading } = useQuery({
-    queryKey: ['recommendations', { filter, page, decades: [...activeDecades].sort().join(',') }],
+    queryKey: queryKeys.recommendations.list({
+      filter,
+      page,
+      decades: [...activeDecades].sort().join(','),
+    }),
     queryFn: () => getRecommendations(queryParams),
     // Keep the current cards on screen while the next page/tab loads instead
     // of flashing back to skeletons on every click.
@@ -728,20 +733,20 @@ export function DiscoverPage() {
 
   // Count per filter for tab badges - fetch all counts independently
   const { data: allCountData } = useQuery({
-    queryKey: ['recommendations', 'count', 'all'],
+    queryKey: queryKeys.recommendations.count('all'),
     queryFn: () => getRecommendations({ limit: '1' }),
   })
   const { data: pendingCountData } = useQuery({
-    queryKey: ['recommendations', 'count', 'pending'],
+    queryKey: queryKeys.recommendations.count('pending'),
     queryFn: () => getRecommendations({ status: 'pending', limit: '1' }),
   })
   const { data: approvedCountData } = useQuery({
-    queryKey: ['recommendations', 'count', 'approved'],
+    queryKey: queryKeys.recommendations.count('approved'),
     queryFn: () =>
       getRecommendations({ status: 'added_to_lidarr,add_failed,approved', limit: '1' }),
   })
   const { data: rejectedCountData } = useQuery({
-    queryKey: ['recommendations', 'count', 'rejected'],
+    queryKey: queryKeys.recommendations.count('rejected'),
     queryFn: () => getRecommendations({ status: 'rejected', limit: '1' }),
   })
 

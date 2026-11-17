@@ -14,6 +14,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errMsg } from '@/core/validation'
+import { queryKeys } from '@/web/lib/query-keys'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { LibraryAlbumCoverageBadge } from '../components/library-album-coverage-badge'
 import { PagerBar } from '../components/pager-bar'
@@ -306,7 +307,7 @@ export function RequestsPage() {
   }
 
   const myRequestsQuery = useQuery({
-    queryKey: ['requests-mine', myRequestsTab, myRequestsPage],
+    queryKey: queryKeys.requests.mine(myRequestsTab, myRequestsPage),
     queryFn: () =>
       listMyRequests({
         limit: String(MY_REQUESTS_PAGE_SIZE),
@@ -327,7 +328,7 @@ export function RequestsPage() {
   )
 
   const pendingQuery = useQuery({
-    queryKey: ['requests-pending'],
+    queryKey: queryKeys.requests.pending,
     queryFn: listPendingRequests,
     enabled: !!currentUser?.isAdmin,
   })
@@ -347,7 +348,7 @@ export function RequestsPage() {
   const submit = useMutation({
     mutationFn: createRequest,
     onSuccess: (result, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(
         result.status === 'dispatched'
           ? 'Request sent to Lidarr'
@@ -370,9 +371,9 @@ export function RequestsPage() {
   const approve = useMutation({
     mutationFn: approveRequest,
     onMutate: async (id) => {
-      await queryClient.cancelQueries({ queryKey: ['requests-pending'] })
-      const previous = queryClient.getQueryData<PendingRequestRecord[]>(['requests-pending'])
-      queryClient.setQueryData<PendingRequestRecord[]>(['requests-pending'], (old) =>
+      await queryClient.cancelQueries({ queryKey: queryKeys.requests.pending })
+      const previous = queryClient.getQueryData<PendingRequestRecord[]>(queryKeys.requests.pending)
+      queryClient.setQueryData<PendingRequestRecord[]>(queryKeys.requests.pending, (old) =>
         (old ?? []).filter((r) => r.id !== id),
       )
       return { previous }
@@ -381,21 +382,20 @@ export function RequestsPage() {
       toast.success('Request approved and sent to Lidarr')
     },
     onError: (err, _id, context) => {
-      if (context?.previous) queryClient.setQueryData(['requests-pending'], context.previous)
+      if (context?.previous) queryClient.setQueryData(queryKeys.requests.pending, context.previous)
       toast.error(errMsg(err))
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
     },
   })
 
   const reject = useMutation({
     mutationFn: ({ id, reason }: { id: number; reason?: string }) => rejectRequest(id, reason),
     onMutate: async ({ id }) => {
-      await queryClient.cancelQueries({ queryKey: ['requests-pending'] })
-      const previous = queryClient.getQueryData<PendingRequestRecord[]>(['requests-pending'])
-      queryClient.setQueryData<PendingRequestRecord[]>(['requests-pending'], (old) =>
+      await queryClient.cancelQueries({ queryKey: queryKeys.requests.pending })
+      const previous = queryClient.getQueryData<PendingRequestRecord[]>(queryKeys.requests.pending)
+      queryClient.setQueryData<PendingRequestRecord[]>(queryKeys.requests.pending, (old) =>
         (old ?? []).filter((r) => r.id !== id),
       )
       return { previous }
@@ -404,19 +404,18 @@ export function RequestsPage() {
       toast.success('Request rejected')
     },
     onError: (err, _vars, context) => {
-      if (context?.previous) queryClient.setQueryData(['requests-pending'], context.previous)
+      if (context?.previous) queryClient.setQueryData(queryKeys.requests.pending, context.previous)
       toast.error(errMsg(err))
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
     },
   })
 
   const retry = useMutation({
     mutationFn: retryRequest,
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(
         result.status === 'dispatched'
           ? 'Request sent to Lidarr'
@@ -429,7 +428,7 @@ export function RequestsPage() {
   const retryFailed = useMutation({
     mutationFn: retryFailedRequests,
     onSuccess: ({ retrying }) => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(
         `Retrying ${retrying} failed request${retrying === 1 ? '' : 's'} -- this can take a few minutes`,
       )
@@ -441,7 +440,7 @@ export function RequestsPage() {
   // backfilled from the next page -- a minor, acceptable gap vs. the cost of
   // re-paginating client-side) so the click feels instant; onSettled's
   // invalidate reconciles counts/pages with the server regardless.
-  const dismissQueryKey = ['requests-mine', myRequestsTab, myRequestsPage] as const
+  const dismissQueryKey = queryKeys.requests.mine(myRequestsTab, myRequestsPage)
   const dismiss = useMutation({
     mutationFn: dismissRequest,
     onMutate: async (id) => {
@@ -464,7 +463,7 @@ export function RequestsPage() {
       toast.error(errMsg(err))
     },
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
     },
   })
 
@@ -473,7 +472,7 @@ export function RequestsPage() {
     mutationFn: dismissAllInLibraryRequests,
     onSuccess: ({ count }) => {
       setMyRequestsPage(0)
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(`Cleared ${count} items from Added to Library`)
     },
     onError: (err) => toast.error(errMsg(err)),
@@ -532,8 +531,7 @@ export function RequestsPage() {
     }
     setBulkAction(null)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
-    queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
     if (succeeded === ids.length) {
       toast.success(`Request approved and sent to Lidarr (${succeeded})`)
     } else {
@@ -559,8 +557,7 @@ export function RequestsPage() {
     }
     setBulkAction(null)
     setBulkProgress(null)
-    queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
-    queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+    queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
     if (succeeded === ids.length) {
       toast.success(`Request rejected (${succeeded})`)
     } else {

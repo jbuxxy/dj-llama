@@ -2,6 +2,7 @@ import { type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
+import { queryKeys } from '@/web/lib/query-keys'
 import { type ActivityJob, applyJob, applySnapshot, isActive, isWatched } from './activity'
 import { clearPlaylistGenerating } from './generating-playlists'
 import { useSSE } from './hooks'
@@ -25,10 +26,8 @@ function invalidateForFinishedJob(queryClient: QueryClient, job: ActivityJob): v
     case 'pipeline':
     case 'quick_discover':
     case 'artist_rescan':
-      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-pick'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-approved'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.recommendations.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.activity })
       queryClient.invalidateQueries({ queryKey: ['pipelineStatus'] })
       break
     case 'library_sync':
@@ -41,13 +40,12 @@ function invalidateForFinishedJob(queryClient: QueryClient, job: ActivityJob): v
     case 'lidarr_dispatch':
     case 'retry_failed':
     case 'bulk_action':
-      queryClient.invalidateQueries({ queryKey: ['recommendations'] })
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
-      queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
-      queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.recommendations.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.activity })
       break
     case 'taste_profile':
-      queryClient.invalidateQueries({ queryKey: ['dashboard-taste'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.taste })
       break
   }
 }
@@ -128,25 +126,22 @@ export function useRealtimeUpdates(): void {
           break
         case 'request-confirmed':
         case 'request-updated':
-          queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
-          queryClient.invalidateQueries({ queryKey: ['requests-pending'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.requests.all })
           // Auto-dispatched requests show up in the Dashboard activity feed too.
-          queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.activity })
           break
         case 'recommendation-confirmed':
-          queryClient.invalidateQueries({ queryKey: ['recommendations'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.recommendations.all })
           break
         case 'playlist-generated':
           clearPlaylistGenerating(queryClient, event.playlistId)
           queryClient.invalidateQueries({ queryKey: ['playlists'] })
-          queryClient.invalidateQueries({ queryKey: ['playlists', 'scheduler'] })
           break
         case 'listening-updated':
-          queryClient.invalidateQueries({ queryKey: ['dashboard-top-artists'] })
-          queryClient.invalidateQueries({ queryKey: ['dashboard-recent-tracks'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.listening })
           break
         case 'activity-updated':
-          queryClient.invalidateQueries({ queryKey: ['dashboard-activity'] })
+          queryClient.invalidateQueries({ queryKey: queryKeys.dashboard.activity })
           break
         default:
           break

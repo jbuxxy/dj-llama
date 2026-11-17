@@ -20,6 +20,7 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Navigate, NavLink, Route, Routes } from 'react-router-dom'
 import { Toaster } from 'sonner'
 import { CHANNEL, GIT_SHA, VERSION } from '@/version'
+import { queryKeys } from '@/web/lib/query-keys'
 import { ActivityCenter } from './components/activity-center'
 import { AppSplash } from './components/app-splash'
 import { AuthGate } from './components/auth-gate'
@@ -274,7 +275,7 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
   // cache and avoids a double-fetch when the admin navigates there from the
   // badge.
   const { data: pendingRequests } = useQuery({
-    queryKey: ['requests-pending'],
+    queryKey: queryKeys.requests.pending,
     queryFn: listPendingRequests,
     enabled: !!currentUser?.isAdmin,
     staleTime: 30_000,

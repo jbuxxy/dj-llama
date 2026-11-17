@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { errMsg } from '@/core/validation'
+import { queryKeys } from '@/web/lib/query-keys'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { LibraryAlbumCoverageBadge } from '../components/library-album-coverage-badge'
 import { Button } from '../components/ui/button'
@@ -45,7 +46,7 @@ export function ArtistDiscographyPage() {
   const submit = useMutation({
     mutationFn: createRequest,
     onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: ['requests-mine'] })
+      queryClient.invalidateQueries({ queryKey: queryKeys.requests.mine() })
       toast.success(
         result.status === 'dispatched'
           ? 'Request sent to Lidarr'
