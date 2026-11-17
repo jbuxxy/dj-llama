@@ -1586,6 +1586,21 @@ async function executePlaylistImport(playlist: PlaylistRow, jobId: number | null
     },
   })
 
+  // Keep the source's track list locally too. The Plex playlist only holds
+  // what matched, so without this the detail page and M3U/XSPF exports had
+  // nothing to show for an import. Which of these are missing is already
+  // tracked in playlist_missing_tracks (reconciled just above).
+  await replacePlaylistTracks(
+    db,
+    playlist.id,
+    tracks.map((t, position) => ({
+      playlistId: playlist.id,
+      artistName: t.artistName,
+      trackName: t.trackName,
+      position,
+    })),
+  )
+
   await updatePlaylistRow(db, playlist.id, {
     name: playlistName,
     // Keep the last known cover if this fetch didn't return one.

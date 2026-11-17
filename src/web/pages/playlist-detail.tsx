@@ -1,12 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
 import { Download, Pencil } from 'lucide-react'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { Hint } from '../components/hint'
 import { GenerateButton, SweepLiveTracksButton } from '../components/playlist-row-actions'
 import { Skeleton } from '../components/ui/skeleton'
-import { exportPlaylistApi, getPlaylist, type PlaylistRow, type PlaylistTrackRow } from '../lib/api'
+import {
+  exportPlaylistApi,
+  getPlaylist,
+  getPlaylistMissingTracks,
+  type PlaylistMissingTrack,
+  type PlaylistRow,
+  type PlaylistTrackRow,
+} from '../lib/api'
 import { formatPlaylistRelativeTime, formatSchedule, strategyBadge } from '../lib/playlist-format'
 
 const SOURCE_BADGES: Record<string, { label: string; className: string }> = {
@@ -45,14 +52,35 @@ function DetailSkeleton() {
   )
 }
 
-function TrackRow({ track, index }: { track: PlaylistTrackRow; index: number }) {
+// Imports mirror a source playlist into Plex, so what matters per track is
+// whether it's in the library yet, not where the metadata came from.
+const IMPORT_BADGES = {
+  found: { label: 'In library', className: 'bg-accent/15 text-accent' },
+  missing: { label: 'Missing', className: 'bg-amber-500/15 text-amber-400' },
+}
+
+const trackKey = (artistName: string, trackName: string | null) =>
+  `${artistName.toLowerCase()}::${(trackName ?? '').toLowerCase()}`
+
+function TrackRow({
+  track,
+  index,
+  missing,
+}: {
+  track: PlaylistTrackRow
+  index: number
+  /** Imports only: undefined = not an import, null = matched in Plex. */
+  missing?: PlaylistMissingTrack | null
+}) {
   const source = detectSource(track)
   const badge =
-    SOURCE_BADGES[source] ??
-    ({ label: source, className: 'bg-surface text-muted border border-border' } as {
-      label: string
-      className: string
-    })
+    missing !== undefined
+      ? IMPORT_BADGES[missing ? 'missing' : 'found']
+      : (SOURCE_BADGES[source] ?? {
+          label: source,
+          className: 'bg-surface text-muted border border-border',
+        })
+  const requesting = missing?.resolvedAlbumTitle
 
   return (
     <div className="flex items-center gap-3 px-3 py-2 rounded-lg hover:bg-surface transition-colors">
@@ -61,13 +89,32 @@ function TrackRow({ track, index }: { track: PlaylistTrackRow; index: number }) 
         <p className="text-sm text-text truncate">
           {track.trackName ?? <span className="text-muted italic">Unknown track</span>}
         </p>
-        <p className="text-xs text-muted truncate">{track.artistName}</p>
+        <p className="text-xs text-muted truncate">
+          {track.artistName}
+          {requesting && ` · Requesting ${requesting}`}
+        </p>
       </div>
-      <span className={`shrink-0 text-micro font-medium px-1.5 py-0.5 rounded ${badge.className}`}>
+      <span
+        className={`shrink-0 text-micro font-medium px-1.5 py-0.5 rounded ${badge.className}`}
+        title={
+          missing
+            ? missing.reason === 'search_error'
+              ? 'Plex search failed last sync -- this may resolve on its own next sync.'
+              : 'Not in your Plex library yet -- DJ Llama requests it from Lidarr.'
+            : undefined
+        }
+      >
         {badge.label}
       </span>
     </div>
   )
+}
+
+function countMissing(
+  tracks: PlaylistTrackRow[],
+  missingByKey: Map<string, PlaylistMissingTrack>,
+): number {
+  return tracks.filter((t) => missingByKey.has(trackKey(t.artistName, t.trackName))).length
 }
 
 function PlaylistActions({
@@ -131,6 +178,19 @@ export function PlaylistDetailPage() {
     queryFn: () => getPlaylist(numId),
     enabled: !Number.isNaN(numId),
   })
+
+  const isImport = data?.playlist.strategy === 'import'
+  // Same key as the Playlists page's missing-tracks list, so both stay in
+  // sync and refresh on the same 'playlists' invalidation.
+  const { data: missingTracks } = useQuery({
+    queryKey: ['playlists', numId, 'missing-tracks'],
+    queryFn: () => getPlaylistMissingTracks(numId),
+    enabled: isImport,
+  })
+  const missingByKey = useMemo(
+    () => new Map((missingTracks ?? []).map((m) => [trackKey(m.artistName, m.trackName), m])),
+    [missingTracks],
+  )
 
   function handleEdit() {
     // Navigate back to playlists and trigger edit via state
@@ -199,11 +259,18 @@ export function PlaylistDetailPage() {
         </div>
       </div>
 
-      <Hint id="playlist-detail-intro-tip" type="inline">
-        This playlist was generated from your approved recommendations. Click Generate Now to
-        refresh it with new picks, download it as M3U or XSPF, or add a playlist target to push
-        future runs to Plex automatically.
-      </Hint>
+      {isImport ? (
+        <Hint id="playlist-detail-import-tip" type="inline">
+          This playlist mirrors one from another service. Each sync matches its songs against your
+          Plex library and requests the missing ones from Lidarr. Generate syncs it now.
+        </Hint>
+      ) : (
+        <Hint id="playlist-detail-intro-tip" type="inline">
+          This playlist was generated from your approved recommendations. Click Generate to refresh
+          it with new picks, download it as M3U or XSPF, or add a playlist target to push future
+          runs to Plex automatically.
+        </Hint>
+      )}
 
       {/* Actions */}
       <PlaylistActions playlist={playlist} onEdit={handleEdit} onRefetch={() => refetch()} />
@@ -213,13 +280,19 @@ export function PlaylistDetailPage() {
         <div className="flex items-center justify-between mb-2">
           <p className="text-xs text-muted uppercase tracking-wide font-semibold">Tracks</p>
           {tracks.length > 0 && (
-            <span className="text-xs text-muted">{`${tracks.length} total`}</span>
+            <span className="text-xs text-muted">
+              {isImport && missingTracks
+                ? `${tracks.length} total · ${countMissing(tracks, missingByKey)} missing`
+                : `${tracks.length} total`}
+            </span>
           )}
         </div>
         {tracks.length === 0 ? (
           <div className="py-12 text-center bg-surface border border-border rounded-lg">
             <p className="text-muted text-sm">
-              No tracks yet. Generate the playlist to populate it.
+              {isImport
+                ? 'No tracks yet. Generate to sync it from the source playlist.'
+                : 'No tracks yet. Generate the playlist to populate it.'}
             </p>
           </div>
         ) : (
@@ -228,7 +301,16 @@ export function PlaylistDetailPage() {
               .slice()
               .sort((a, b) => a.position - b.position)
               .map((track, i) => (
-                <TrackRow key={track.id} track={track} index={i} />
+                <TrackRow
+                  key={track.id}
+                  track={track}
+                  index={i}
+                  missing={
+                    isImport
+                      ? (missingByKey.get(trackKey(track.artistName, track.trackName)) ?? null)
+                      : undefined
+                  }
+                />
               ))}
           </div>
         )}
