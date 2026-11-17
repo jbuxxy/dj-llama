@@ -23,7 +23,6 @@ const SESSION_AUTH_METHODS = {
 const PUBLIC_PATHS = new Set([
   '/health',
   '/api/v1/setup/status',
-  '/api/v1/setup/complete',
   '/api/v1/auth/status',
   '/api/v1/auth/login',
   '/api/v1/auth/register',
@@ -46,11 +45,7 @@ const PUBLIC_PATHS = new Set([
   '/api/v1/webhooks/plex',
 ])
 
-const OPTIONAL_AUTH_PATHS = new Set([
-  '/api/v1/setup/status',
-  '/api/v1/setup/complete',
-  '/api/v1/auth/status',
-])
+const OPTIONAL_AUTH_PATHS = new Set(['/api/v1/setup/status', '/api/v1/auth/status'])
 
 // Only SSE/audio flows are allowed to use query-param auth tokens.
 const QUERY_TOKEN_PATHS = new Set([

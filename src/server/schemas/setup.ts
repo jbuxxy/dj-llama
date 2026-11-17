@@ -1,4 +1,5 @@
 import * as z from 'zod'
+import { preferencesSchema } from './settings'
 
 // Setup wizard accepts a bunch of fields, most optional, with
 // conditional-require rules enforced in the handler (e.g., lidarrApiKey
@@ -14,6 +15,6 @@ export const setupCompleteSchema = z
     aiApiKey: z.string().max(500).nullish(),
     aiModel: z.string().max(200).optional(),
     aiBaseUrl: z.string().max(2048).nullish(),
-    preferences: z.record(z.string(), z.unknown()).optional(),
+    preferences: preferencesSchema.optional(),
   })
-  .passthrough()
+  .strip()

@@ -41,6 +41,7 @@ function makeDeps(overrides: Partial<AppDependencies> = {}): AppDependencies {
   return {
     db: {} as never,
     getUserCount: vi.fn(async () => 1),
+    getUserById: vi.fn(async () => ({ id: 1, isAdmin: false, hasMusicAccess: true })),
     isSetupComplete: async () => true,
     getSettings: vi.fn(async () => ({}) as never),
     ...overrides,

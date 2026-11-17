@@ -91,7 +91,11 @@ function makeDeps(overrides: Partial<AppDependencies> = {}): AppDependencies {
       createdAt: new Date(),
     })),
     getUserByUsername: vi.fn(async () => null),
-    getUserById: vi.fn(async () => null),
+    getUserById: vi.fn(async (id: number) =>
+      id === 42
+        ? ({ id: 42, isAdmin: true, hasMusicAccess: true, plexAccessRevokedAt: null } as never)
+        : null,
+    ),
     getUserCount: vi.fn(async () => 0),
     genreService: {} as unknown as AppDependencies['genreService'],
     libraryHealth: {} as unknown as AppDependencies['libraryHealth'],
@@ -159,6 +163,11 @@ describe('GET /api/v1/setup/status', () => {
   })
 })
 
+const adminHeaders = {
+  'Content-Type': 'application/json',
+  Authorization: 'Bearer test-session-token',
+}
+
 describe('POST /api/v1/setup/complete', () => {
   const validBody = {
     lidarrUrl: 'http://lidarr:8686',
@@ -167,11 +176,57 @@ describe('POST /api/v1/setup/complete', () => {
     aiModel: 'llama3',
   }
 
+  it('requires a signed-in session', async () => {
+    const completeSetup = vi.fn(async () => ({ id: 1, setupComplete: true }))
+    const app = createApp(makeDeps({ completeSetup }))
+    const res = await app.request('/api/v1/setup/complete', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(validBody),
+    })
+    expect(res.status).toBe(401)
+    expect(completeSetup).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-admin session', async () => {
+    const completeSetup = vi.fn(async () => ({ id: 1, setupComplete: true }))
+    const app = createApp(
+      makeDeps({
+        completeSetup,
+        getUserById: vi.fn(async () => ({
+          id: 42,
+          isAdmin: false,
+          hasMusicAccess: true,
+          plexAccessRevokedAt: null,
+        })) as never,
+      }),
+    )
+    const res = await app.request('/api/v1/setup/complete', {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify(validBody),
+    })
+    expect(res.status).toBe(403)
+    expect(completeSetup).not.toHaveBeenCalled()
+  })
+
+  it('rejects a cloud-metadata AI base URL', async () => {
+    const completeSetup = vi.fn(async () => ({ id: 1, setupComplete: true }))
+    const app = createApp(makeDeps({ completeSetup }))
+    const res = await app.request('/api/v1/setup/complete', {
+      method: 'POST',
+      headers: adminHeaders,
+      body: JSON.stringify({ ...validBody, aiBaseUrl: 'http://169.254.169.254/latest' }),
+    })
+    expect(res.status).toBe(400)
+    expect(completeSetup).not.toHaveBeenCalled()
+  })
+
   it('accepts valid config and returns 204', async () => {
     const app = createApp(makeDeps())
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(validBody),
     })
     expect(res.status).toBe(204)
@@ -182,7 +237,7 @@ describe('POST /api/v1/setup/complete', () => {
     const app = createApp(makeDeps({ completeSetup }))
     await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(validBody),
     })
     expect(completeSetup).toHaveBeenCalledTimes(1)
@@ -193,7 +248,7 @@ describe('POST /api/v1/setup/complete', () => {
     const { lidarrUrl: _, ...body } = validBody
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(400)
@@ -204,7 +259,7 @@ describe('POST /api/v1/setup/complete', () => {
     const { lidarrApiKey: _, ...body } = validBody
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(400)
@@ -215,7 +270,7 @@ describe('POST /api/v1/setup/complete', () => {
     const { aiProvider: _, ...body } = validBody
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(400)
@@ -226,7 +281,7 @@ describe('POST /api/v1/setup/complete', () => {
     const { aiModel: _, ...body } = validBody
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(400)
@@ -236,7 +291,7 @@ describe('POST /api/v1/setup/complete', () => {
     const app = createApp(makeDeps())
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(validBody),
     })
     expect(res.status).toBe(204)
@@ -254,7 +309,7 @@ describe('POST /api/v1/setup/complete', () => {
     }
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify(body),
     })
     expect(res.status).toBe(204)

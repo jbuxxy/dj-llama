@@ -1,8 +1,19 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { clearAllSessions, createSession } from '@/core/sessions'
 import { createTestApp } from '../helpers/test-app'
 
+const adminHeaders = {
+  'Content-Type': 'application/json',
+  Authorization: 'Bearer setup-admin-token',
+}
+
 describe('API routes: setup', () => {
+  beforeEach(async () => {
+    await clearAllSessions()
+    await createSession(1, 'setup-admin-token')
+  })
+
   it('returns setup status correctly', async () => {
     const { app } = createTestApp({
       isSetupComplete: vi.fn(async () => false),
@@ -16,7 +27,6 @@ describe('API routes: setup', () => {
   })
 
   it('rejects setup/complete when setup is already done', async () => {
-    // getUserCount=0 so auth is skipped (no users registered yet)
     const { app } = createTestApp({
       isSetupComplete: vi.fn(async () => true),
       getUserCount: vi.fn(async () => 0),
@@ -24,7 +34,7 @@ describe('API routes: setup', () => {
 
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify({ mode: 'discover' }),
     })
     expect(res.status).toBe(409)
@@ -40,7 +50,7 @@ describe('API routes: setup', () => {
 
     const completeRes = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify({
         lidarrUrl: 'http://lidarr:8686',
         lidarrApiKey: 'secret',
@@ -60,7 +70,7 @@ describe('API routes: setup', () => {
 
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify({ mode: 'discover' }),
     })
     expect(res.status).toBe(400)
@@ -78,7 +88,7 @@ describe('API routes: setup', () => {
 
     const res = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify({
         lidarrUrl: 'http://lidarr:8686',
         lidarrApiKey: 'secret',
@@ -107,7 +117,7 @@ describe('API routes: setup', () => {
 
     const completeRes = await app.request('/api/v1/setup/complete', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: adminHeaders,
       body: JSON.stringify({
         lidarrUrl: 'http://lidarr:8686',
         lidarrApiKey: 'secret',

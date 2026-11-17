@@ -592,6 +592,7 @@ function makeSyncApp(
     options.getUserById ??
     (vi.fn(async () => ({
       isAdmin: options.isAdmin ?? true,
+      hasMusicAccess: true,
     })) as unknown as AppDependencies['getUserById'])
   const routeDeps = {
     db: { execute: vi.fn(async () => []) } as unknown as AppDependencies['db'],
@@ -859,6 +860,7 @@ describe('GET /api/v1/library/album-coverage/:artistMbid', () => {
           id: 7,
           username: 'listener',
           isAdmin: false,
+          hasMusicAccess: true,
         })) as unknown as AppDependencies['getUserById'],
         albumCoverage: {
           getCoverageForArtist: vi.fn(async () => coverage),

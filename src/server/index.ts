@@ -18,6 +18,7 @@ import { csrfGuard } from './middleware/csrf'
 import { interactiveLane } from './middleware/interactive-lane'
 import { jsonEtag } from './middleware/json-etag'
 import { requestLogger } from './middleware/logger'
+import { canUseApp, musicAccessGuard } from './middleware/music-access'
 import { rateLimiter } from './middleware/rate-limit'
 import { setupGuard } from './middleware/setup-guard'
 import { adminRoutes } from './routes/admin'
@@ -179,6 +180,7 @@ export function createApp(deps: AppDependencies) {
       isSetupComplete: deps.isSetupComplete,
     }),
   )
+  app.use('*', musicAccessGuard(deps.getUserById))
   app.use('*', csrfGuard)
   app.use('*', setupGuard(deps.isSetupComplete))
   app.use('*', maintenanceMiddleware)
@@ -219,7 +221,7 @@ export function createApp(deps: AppDependencies) {
       // stored flag, since they need Settings access even if they aren't
       // personally shared on Music. See routes/auth-plex.ts and
       // core/auth/plex-user-sync.ts for how this gets kept fresh.
-      hasMusicAccess: user ? user.isAdmin || user.hasMusicAccess : false,
+      hasMusicAccess: user ? canUseApp(user) : false,
       // True until the very first (owner) Plex login completes bootstrap --
       // the frontend shows a distinct welcome screen ("sign in with the
       // account that owns this server") instead of the normal sign-in screen

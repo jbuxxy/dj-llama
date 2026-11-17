@@ -7,6 +7,7 @@
 
 import { unusablePasswordHash } from '@/core/auth'
 import { getPlexServerSharedUsers } from '@/core/auth/plex'
+import { clearUserSessions } from '@/core/sessions'
 import { errMsg } from '@/core/validation'
 import type { Database } from '@/db'
 import { getSettings } from '@/db/queries/settings'
@@ -88,6 +89,8 @@ export async function syncPlexServerUsers(db: Database): Promise<PlexUserSyncRes
     if (u.plexAccessRevokedAt) continue
     if (!seenAccountIds.has(u.plexAccountId)) {
       await updateUser(db, u.id, { plexAccessRevokedAt: new Date() })
+      // Sign them out everywhere now rather than when the session expires.
+      await clearUserSessions(u.id)
       revoked++
     }
   }

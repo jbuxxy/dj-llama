@@ -69,7 +69,7 @@ export const notificationChannel = z.discriminatedUnion('type', [
   }),
 ]) satisfies z.ZodType<NotificationChannel>
 
-const preferencesSchema = z.object({
+export const preferencesSchema = z.object({
   qualityProfileId: z.number().int().optional(),
   metadataProfileId: z.number().int().optional(),
   rootFolderId: z.number().int().optional(),

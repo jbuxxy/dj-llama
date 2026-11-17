@@ -7,6 +7,9 @@ vi.mock('@/core/auth', () => ({
 vi.mock('@/core/auth/plex', () => ({
   getPlexServerSharedUsers: vi.fn(),
 }))
+vi.mock('@/core/sessions', () => ({
+  clearUserSessions: vi.fn(),
+}))
 vi.mock('@/db/queries/settings', () => ({
   getSettings: vi.fn(),
 }))
@@ -19,6 +22,7 @@ vi.mock('@/db/queries/users', () => ({
 
 import { getPlexServerSharedUsers } from '@/core/auth/plex'
 import { syncPlexServerUsers } from '@/core/auth/plex-user-sync'
+import { clearUserSessions } from '@/core/sessions'
 import { getSettings } from '@/db/queries/settings'
 import {
   createUser,
@@ -174,6 +178,7 @@ describe('syncPlexServerUsers', () => {
     const result = await syncPlexServerUsers(db)
 
     expect(result.revoked).toBe(1)
+    expect(vi.mocked(clearUserSessions)).toHaveBeenCalledTimes(1)
     expect(mockUpdateUser).toHaveBeenCalledWith(
       db,
       9,

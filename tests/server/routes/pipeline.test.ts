@@ -323,7 +323,9 @@ describe('POST /api/v1/pipeline/quick-discover', () => {
     const app = createApp(
       makeDeps({
         getUserCount: vi.fn(async () => 1),
-        getUserById: vi.fn(async () => ({ id: 1, username: 'test', isAdmin: false }) as never),
+        getUserById: vi.fn(
+          async () => ({ id: 1, username: 'test', isAdmin: false, hasMusicAccess: true }) as never,
+        ),
         providerRegistry: {
           create: vi.fn().mockResolvedValue({
             getRecommendations,
@@ -424,7 +426,7 @@ describe('POST /api/v1/pipeline/rescan', () => {
       imageUrl: null,
       imageFailedAt: null,
     })
-    deps.getUserById = vi.fn(async () => ({ isAdmin: false }) as never)
+    deps.getUserById = vi.fn(async () => ({ isAdmin: false, hasMusicAccess: true }) as never)
     const app = createApp(deps)
 
     const res = await authedRequest(app, '/api/v1/pipeline/rescan', { method: 'POST' })
