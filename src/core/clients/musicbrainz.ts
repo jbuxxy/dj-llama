@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import PQueue from 'p-queue'
 import { TtlCache } from '@/core/cache/ttl-cache'
+import { errMsg } from '@/core/validation'
 import { VERSION } from '@/version'
 
 const BASE_URL = 'https://musicbrainz.org/ws/2'
@@ -187,6 +188,21 @@ export function getMusicBrainzQueueDepth(): number {
   return sharedQueue.size + sharedQueue.pending
 }
 
+/** Non-OK MusicBrainz response; `status` lets callers treat 404 as "no such entity". */
+export class MusicBrainzHttpError extends Error {
+  constructor(
+    readonly status: number,
+    path: string,
+  ) {
+    super(`MusicBrainz HTTP ${status} for ${path}`)
+    this.name = 'MusicBrainzHttpError'
+  }
+}
+
+function isNotFound(err: unknown): boolean {
+  return err instanceof MusicBrainzHttpError && err.status === 404
+}
+
 export function createMusicBrainzClient() {
   const queue = sharedQueue
 
@@ -221,13 +237,13 @@ export function createMusicBrainzClient() {
 
         // Non-retryable HTTP status: surface immediately.
         if (!TRANSIENT_STATUSES.has(res.status)) {
-          throw new Error(`MusicBrainz HTTP ${res.status} for ${path}`)
+          throw new MusicBrainzHttpError(res.status, path)
         }
 
         // Transient HTTP status: prefer server-provided Retry-After, else
         // exponential backoff with jitter. Final failed attempt throws out.
         if (attempt === MAX_RETRIES) {
-          throw new Error(`MusicBrainz HTTP ${res.status} for ${path}`)
+          throw new MusicBrainzHttpError(res.status, path)
         }
         // A Retry-After of 0 (or anything shorter than our own backoff) is not
         // meaningful signal to retry immediately -- during a real 503 storm it
@@ -242,7 +258,7 @@ export function createMusicBrainzClient() {
           `[musicbrainz] HTTP ${res.status} for ${path} (attempt ${attempt + 1}/${MAX_RETRIES + 1}); retrying in ${Math.round(backoff)}ms`,
         )
         await sleep(backoff)
-        lastErr = new Error(`MusicBrainz HTTP ${res.status} for ${path}`)
+        lastErr = new MusicBrainzHttpError(res.status, path)
       } catch (err) {
         // Network/timeout errors are retryable. The final attempt rethrows.
         const retryable =
@@ -255,7 +271,7 @@ export function createMusicBrainzClient() {
         }
         const backoff = BASE_BACKOFF_MS * 2 ** attempt + Math.random() * 250
         console.warn(
-          `[musicbrainz] ${err instanceof Error ? err.message : String(err)} for ${path} (attempt ${attempt + 1}/${MAX_RETRIES + 1}); retrying in ${Math.round(backoff)}ms`,
+          `[musicbrainz] ${errMsg(err)} for ${path} (attempt ${attempt + 1}/${MAX_RETRIES + 1}); retrying in ${Math.round(backoff)}ms`,
         )
         await sleep(backoff)
         lastErr = err
@@ -302,9 +318,24 @@ export function createMusicBrainzClient() {
   // is the correct way to find a specific Compilation/Live release-group:
   // scoping the query by title too keeps the result set small regardless of
   // how bootlegged the artist's catalog is.
+  // Resolution asks for the same artist's catalog more than once (AI-title
+  // match, then the fallback album pick; reconciler passes) -- each a full
+  // rate-limited MB slot. Memoized like lookupArtist; callers get a copy so
+  // none can reorder the cached list in place.
+  const releaseGroupMemo = new TtlCache<MBReleaseGroup[]>(6 * 60 * 60 * 1000, 2000)
   async function getReleaseGroups(
     artistMbid: string,
     types: readonly string[] = ['Album', 'EP'],
+  ): Promise<MBReleaseGroup[]> {
+    const groups = await releaseGroupMemo.get(`${artistMbid}|${types.join(',')}`, () =>
+      fetchReleaseGroups(artistMbid, types),
+    )
+    return groups.slice()
+  }
+
+  async function fetchReleaseGroups(
+    artistMbid: string,
+    types: readonly string[],
   ): Promise<MBReleaseGroup[]> {
     const primaryClause = types
       .map((type) => `primarytype:${type.charAt(0).toUpperCase()}${type.slice(1).toLowerCase()}`)
@@ -411,7 +442,7 @@ export function createMusicBrainzClient() {
     try {
       data = await request<MBRecordingLookup>(`/recording/${mbid}?${params}`)
     } catch (err) {
-      if (err instanceof Error && err.message.includes('404')) return null
+      if (isNotFound(err)) return null
       throw err
     }
     const credit = data['artist-credit']?.[0]
@@ -437,7 +468,7 @@ export function createMusicBrainzClient() {
     try {
       data = await request<MBRecordingWithReleasesLookup>(`/recording/${mbid}?${params}`)
     } catch (err) {
-      if (err instanceof Error && err.message.includes('404')) return null
+      if (isNotFound(err)) return null
       throw err
     }
     const credit = data['artist-credit']?.[0]
@@ -685,7 +716,7 @@ export function createMusicBrainzClient() {
         `/isrc/${encodeURIComponent(isrc)}?${params}`,
       )
     } catch (err) {
-      if (err instanceof Error && err.message.includes('404')) return []
+      if (isNotFound(err)) return []
       throw err
     }
     return data.recordings ?? []

@@ -9,6 +9,7 @@ import {
 } from 'node:fs'
 import { basename, join } from 'node:path'
 import { sql } from 'drizzle-orm'
+import { errMsg } from '@/core/validation'
 import { createBackup } from './backup'
 import type { MigrationStatus, OpsDb, PreFlightResult } from './types'
 
@@ -206,7 +207,7 @@ export async function runPreFlightCheck(db: OpsDb): Promise<PreFlightResult> {
       backupError: null,
     }
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errMsg(err)
     console.warn(`[ops] Auto-backup failed: ${msg}`)
     return {
       pendingCount: status.pendingCount,

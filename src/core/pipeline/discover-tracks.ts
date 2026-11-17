@@ -8,6 +8,7 @@ import type {
   TrackTasteProfile,
   TrackTasteSignal,
 } from '@/core/types'
+import { errMsg } from '@/core/validation'
 
 // How many of the user's top-weighted track signals get used as AI
 // track-recommendation seeds.
@@ -137,10 +138,7 @@ export async function discoverSimilarTracks(
               })
             }
           } catch (err) {
-            failures.set(
-              provider.id,
-              redactSecrets(err instanceof Error ? err.message : String(err)),
-            )
+            failures.set(provider.id, redactSecrets(errMsg(err)))
           }
         })
       }),
@@ -185,7 +183,7 @@ export async function discoverSimilarTracks(
       }
     } catch (err) {
       console.warn(
-        `[discover-tracks] AI track recommendation failed: ${redactSecrets(err instanceof Error ? err.message : String(err))}`,
+        `[discover-tracks] AI track recommendation failed: ${redactSecrets(errMsg(err))}`,
       )
     }
   }

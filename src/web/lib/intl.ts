@@ -10,15 +10,6 @@ export function formatShortDate(value: string | Date): string {
   return formatDate(value, { month: 'short', day: 'numeric' })
 }
 
-export function formatShortDateTime(value: string | Date): string {
-  return formatDate(value, {
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-}
-
 export function formatDateTime(value: string | Date): string {
   return formatDate(value, {
     dateStyle: 'medium',

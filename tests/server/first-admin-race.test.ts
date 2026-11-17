@@ -19,8 +19,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { HonoEnv } from '@/server/types'
 
 vi.mock('@/core/auth', () => ({
-  hashPassword: vi.fn(() => 'mocked-hash'),
-  verifyPassword: vi.fn(() => false),
+  unusablePasswordHash: vi.fn(() => 'mocked-hash'),
 }))
 
 vi.mock('@/core/auth/plex', () => ({

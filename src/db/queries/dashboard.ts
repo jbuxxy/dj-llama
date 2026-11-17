@@ -102,80 +102,16 @@ export async function getRecentActivity(
   isAdmin: boolean,
   limit = 5,
 ): Promise<ActivityEntry[]> {
-  const entries: ActivityEntry[] = []
-
-  // 1. Recent recommendation actions
   const recWhere =
     userId && !isAdmin
       ? and(isNotNull(recommendations.actedOnAt), eq(recommendations.userId, userId))
       : isNotNull(recommendations.actedOnAt)
 
-  const recentRecs = await db
-    .select({
-      status: recommendations.status,
-      actedOnAt: recommendations.actedOnAt,
-      artistName: artists.name,
-      userId: recommendations.userId,
-    })
-    .from(recommendations)
-    .innerJoin(artists, eq(recommendations.artistId, artists.id))
-    .where(recWhere)
-    .orderBy(desc(recommendations.actedOnAt))
-    .limit(10)
-
-  let userMap = new Map<number, string>()
-  if (isAdmin && recentRecs.length > 0) {
-    const userIds = [...new Set(recentRecs.map((r) => r.userId).filter(Boolean))] as number[]
-    if (userIds.length > 0) {
-      const userRows = await db
-        .select({ id: users.id, username: users.username })
-        .from(users)
-        .where(inArray(users.id, userIds))
-      userMap = new Map(userRows.map((u) => [u.id, u.username]))
-    }
-  }
-
-  for (const rec of recentRecs) {
-    const status = rec.status === 'rejected' ? ('rejected' as const) : ('approved' as const)
-    entries.push({
-      type: status,
-      timestamp: rec.actedOnAt?.toISOString() ?? '',
-      data: {
-        artistName: rec.artistName,
-        username: isAdmin && rec.userId ? userMap.get(rec.userId) : undefined,
-      },
-    })
-  }
-
-  // 2. Recent batches (scan events) - admin sees all
-  if (isAdmin) {
-    const recentBatches = await db
-      .select({
-        createdAt: recommendationBatches.createdAt,
-        stats: recommendationBatches.stats,
-      })
-      .from(recommendationBatches)
-      .orderBy(desc(recommendationBatches.createdAt))
-      .limit(5)
-
-    for (const batch of recentBatches) {
-      const stats = batch.stats as { discovered?: number; added?: number } | null
-      entries.push({
-        type: 'scan_completed',
-        timestamp: batch.createdAt.toISOString(),
-        data: {
-          discovered: stats?.discovered ?? 0,
-          added: stats?.added ?? 0,
-        },
-      })
-    }
-  }
-
-  // 4. Recent playlist-import auto-approved requests. These never go through
-  // an admin/user decision -- see index.ts's autoRequestMissingPlaylistTracks,
-  // which calls resolveRequest() without a decidedByUserId. Every other path
-  // that resolves a request (manual submit, retry, admin approve/reject)
-  // always stamps a real deciding user, so `decidedByUserId IS NULL` is what
+  // Playlist-import auto-approved requests never go through an admin/user
+  // decision -- see index.ts's autoRequestMissingPlaylistTracks, which calls
+  // resolveRequest() without a decidedByUserId. Every other path that
+  // resolves a request (manual submit, retry, admin approve/reject) always
+  // stamps a real deciding user, so `decidedByUserId IS NULL` is what
   // distinguishes "playlist import added this automatically" from a request
   // someone actually acted on.
   const reqWhere =
@@ -187,29 +123,87 @@ export async function getRecentActivity(
         )
       : and(eq(requests.status, 'dispatched'), isNull(requests.decidedByUserId))
 
-  const recentAutoRequests = await db
-    .select({
-      artistName: requests.artistName,
-      albumTitle: requests.albumTitle,
-      decidedAt: requests.decidedAt,
-      createdAt: requests.createdAt,
-      requestedByUserId: requests.requestedByUserId,
-      playlistName: playlists.name,
-    })
-    .from(requests)
-    .leftJoin(playlists, eq(playlists.id, requests.sourcePlaylistId))
-    .where(reqWhere)
-    .orderBy(desc(requests.decidedAt))
-    .limit(10)
+  // The three sources are independent, so they're read together.
+  const [recentRecs, recentBatches, recentAutoRequests] = await Promise.all([
+    db
+      .select({
+        status: recommendations.status,
+        actedOnAt: recommendations.actedOnAt,
+        artistName: artists.name,
+        userId: recommendations.userId,
+      })
+      .from(recommendations)
+      .innerJoin(artists, eq(recommendations.artistId, artists.id))
+      .where(recWhere)
+      .orderBy(desc(recommendations.actedOnAt))
+      .limit(10),
+    // Scan events are admin-only.
+    isAdmin
+      ? db
+          .select({
+            createdAt: recommendationBatches.createdAt,
+            stats: recommendationBatches.stats,
+          })
+          .from(recommendationBatches)
+          .orderBy(desc(recommendationBatches.createdAt))
+          .limit(5)
+      : Promise.resolve([]),
+    db
+      .select({
+        artistName: requests.artistName,
+        albumTitle: requests.albumTitle,
+        decidedAt: requests.decidedAt,
+        createdAt: requests.createdAt,
+        requestedByUserId: requests.requestedByUserId,
+        playlistName: playlists.name,
+      })
+      .from(requests)
+      .leftJoin(playlists, eq(playlists.id, requests.sourcePlaylistId))
+      .where(reqWhere)
+      .orderBy(desc(requests.decidedAt))
+      .limit(10),
+  ])
 
-  let requestUserMap = new Map<number, string>()
-  if (isAdmin && recentAutoRequests.length > 0) {
-    const userIds = [...new Set(recentAutoRequests.map((r) => r.requestedByUserId))]
-    const userRows = await db
-      .select({ id: users.id, username: users.username })
-      .from(users)
-      .where(inArray(users.id, userIds))
-    requestUserMap = new Map(userRows.map((u) => [u.id, u.username]))
+  // Admins see who did what: one username lookup covers both lists.
+  let usernames = new Map<number, string>()
+  if (isAdmin) {
+    const userIds = [
+      ...new Set([
+        ...recentRecs.map((r) => r.userId).filter((id): id is number => id != null),
+        ...recentAutoRequests.map((r) => r.requestedByUserId),
+      ]),
+    ]
+    if (userIds.length > 0) {
+      const userRows = await db
+        .select({ id: users.id, username: users.username })
+        .from(users)
+        .where(inArray(users.id, userIds))
+      usernames = new Map(userRows.map((u) => [u.id, u.username]))
+    }
+  }
+
+  const entries: ActivityEntry[] = []
+  for (const rec of recentRecs) {
+    entries.push({
+      type: rec.status === 'rejected' ? 'rejected' : 'approved',
+      timestamp: rec.actedOnAt?.toISOString() ?? '',
+      data: {
+        artistName: rec.artistName,
+        username: isAdmin && rec.userId ? usernames.get(rec.userId) : undefined,
+      },
+    })
+  }
+
+  for (const batch of recentBatches) {
+    const stats = batch.stats as { discovered?: number; added?: number } | null
+    entries.push({
+      type: 'scan_completed',
+      timestamp: batch.createdAt.toISOString(),
+      data: {
+        discovered: stats?.discovered ?? 0,
+        added: stats?.added ?? 0,
+      },
+    })
   }
 
   for (const req of recentAutoRequests) {
@@ -220,7 +214,7 @@ export async function getRecentActivity(
         artistName: req.artistName,
         albumTitle: req.albumTitle ?? undefined,
         playlistName: req.playlistName ?? undefined,
-        username: isAdmin ? requestUserMap.get(req.requestedByUserId) : undefined,
+        username: isAdmin ? usernames.get(req.requestedByUserId) : undefined,
       },
     })
   }

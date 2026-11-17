@@ -557,7 +557,6 @@ describe('GET /api/v1/library/warm/status', () => {
 import { libraryRoutes } from '@/server/routes/library'
 
 type SyncAppOptions = {
-  authSkipped?: boolean
   userId?: number
   isAdmin?: boolean
   getUserById?: AppDependencies['getUserById']
@@ -609,7 +608,6 @@ function makeSyncApp(
   }
   const app = new Hono<HonoEnv>()
   app.use('*', async (c, next) => {
-    c.set('authSkipped', options.authSkipped ?? false)
     if (options.userId !== undefined ? options.userId : 42) {
       c.set('userId', options.userId ?? 42)
     }

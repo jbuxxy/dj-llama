@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { MoreHorizontal, RefreshCw } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { errMsg } from '@/core/validation'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { Hint } from '../components/hint'
 import { Button } from '../components/ui/button'
+import { useClickOutside } from '../hooks/use-click-outside'
 import {
   type AdminUser,
   deleteUserApi,
@@ -74,19 +75,7 @@ function ActionsMenu({ username, items }: { username: string; items: MenuItem[] 
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
 
-  useEffect(() => {
-    if (!open) return
-    const onPointer = (e: PointerEvent) => {
-      if (!ref.current?.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && setOpen(false)
-    document.addEventListener('pointerdown', onPointer)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('pointerdown', onPointer)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
+  useClickOutside(ref, () => setOpen(false), open)
 
   return (
     <div ref={ref} className="relative shrink-0">

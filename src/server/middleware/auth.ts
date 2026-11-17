@@ -64,14 +64,9 @@ export function authGuard(options: {
   isSetupComplete: () => Promise<boolean>
 }) {
   return createMiddleware<HonoEnv>(async (c, next) => {
-    const publicPath =
-      !c.req.path.startsWith('/api/v1/') ||
-      PUBLIC_PATHS.has(c.req.path) ||
-      /^\/api\/v1\/auth\/oauth\/[^/]+\/callback$/.test(c.req.path)
+    const publicPath = !c.req.path.startsWith('/api/v1/') || PUBLIC_PATHS.has(c.req.path)
 
-    // Skip auth for non-API paths (static assets, SPA routes), public API paths, and OAuth callbacks
-    // Only the callback path is public (browser redirect from provider, no auth header).
-    // Other OAuth paths (initiate, status, delete) need auth so userId is set on context.
+    // Skip auth for non-API paths (static assets, SPA routes) and public API paths.
     if (publicPath && !OPTIONAL_AUTH_PATHS.has(c.req.path)) return next()
 
     // Extract one credential and retain its source through verification.
@@ -124,7 +119,7 @@ export function authGuard(options: {
 
     if (publicPath) return next()
 
-    // DJ Llama fork: no anonymous bootstrap window. Plex sign-in (public
+    // No anonymous bootstrap window. Plex sign-in (public
     // path, handled above) is the only way to get a session, for the very
     // first user same as any other -- so a non-public path with no valid
     // credential always falls through to notAuthenticated below, even

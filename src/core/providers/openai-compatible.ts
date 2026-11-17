@@ -8,7 +8,7 @@ import {
 import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
 import { RecommendationStreamParser } from './stream-parse'
-import { timeoutSecondsWithDefaultToMs } from './timeout'
+import { timeoutMessage, timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const DEFAULT_TIMEOUT_SECONDS = 60
@@ -20,11 +20,6 @@ function buildChatCompletionsUrl(baseUrl: string): string {
     return `${normalized}/chat/completions`
   }
   return `${normalized}/v1/chat/completions`
-}
-
-function timeoutMessage(operation: string, timeoutMs: number): string {
-  const seconds = timeoutMs / 1000
-  return `OpenAI-Compatible ${operation} timed out after ${seconds} second${seconds === 1 ? '' : 's'}`
 }
 
 export class OpenAICompatibleProvider implements RecommendationProvider {
@@ -54,50 +49,45 @@ export class OpenAICompatibleProvider implements RecommendationProvider {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' }
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
-      const res = await fetchWithRetry(
-        this.chatCompletionsUrl,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            model: this.model,
-            messages: [
-              { role: 'system', content: 'Respond with a JSON array only.' },
-              { role: 'user', content: prompt },
-            ],
-            max_completion_tokens: 4096,
-          }),
-          signal: controller.signal,
-        },
-        { providerLabel: 'openai-compatible' },
-      )
+    return withTimeout(
+      this.timeoutMs,
+      'OpenAI-Compatible recommendation request',
+      async (signal) => {
+        const res = await fetchWithRetry(
+          this.chatCompletionsUrl,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              model: this.model,
+              messages: [
+                { role: 'system', content: 'Respond with a JSON array only.' },
+                { role: 'user', content: prompt },
+              ],
+              max_completion_tokens: 4096,
+            }),
+            signal: signal,
+          },
+          { providerLabel: 'openai-compatible' },
+        )
 
-      const data = (await res.json()) as {
-        choices?: Array<{ message?: { content?: string } }>
-        usage?: { prompt_tokens?: number; completion_tokens?: number }
-      }
-      if (data.usage) {
-        this.lastUsage = {
-          provider: 'openai-compatible',
-          model: this.model,
-          inputTokens: data.usage.prompt_tokens,
-          outputTokens: data.usage.completion_tokens,
+        const data = (await res.json()) as {
+          choices?: Array<{ message?: { content?: string } }>
+          usage?: { prompt_tokens?: number; completion_tokens?: number }
         }
-      }
-      const text = data.choices?.[0]?.message?.content
-      if (!text) throw new Error('Empty response')
-      return parseRecommendationResponse(unwrapRecommendationArrayPayload(text))
-    } catch (err: unknown) {
-      if (controller.signal.aborted) {
-        throw new Error(timeoutMessage('recommendation request', this.timeoutMs))
-      }
-      throw err
-    } finally {
-      clearTimeout(timer)
-    }
+        if (data.usage) {
+          this.lastUsage = {
+            provider: 'openai-compatible',
+            model: this.model,
+            inputTokens: data.usage.prompt_tokens,
+            outputTokens: data.usage.completion_tokens,
+          }
+        }
+        const text = data.choices?.[0]?.message?.content
+        if (!text) throw new Error('Empty response')
+        return parseRecommendationResponse(unwrapRecommendationArrayPayload(text))
+      },
+    )
   }
 
   async streamRecommendations(
@@ -110,73 +100,68 @@ export class OpenAICompatibleProvider implements RecommendationProvider {
     if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`
     const parser = new RecommendationStreamParser(onRecommendation)
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
-      const res = await fetchWithRetry(
-        this.chatCompletionsUrl,
-        {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({
-            model: this.model,
-            messages: [
-              { role: 'system', content: 'Respond with a JSON array only.' },
-              { role: 'user', content: prompt },
-            ],
-            max_completion_tokens: 4096,
-            stream: true,
-          }),
-          signal: controller.signal,
-        },
-        { providerLabel: 'openai-compatible' },
-      )
-      if (!res.body) throw new Error('Empty response')
-      // Some "compatible" servers ignore stream:true and answer with one
-      // plain JSON body -- handle that the same as getRecommendations.
-      if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
-        const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
-        const text = data.choices?.[0]?.message?.content
-        if (!text) throw new Error('Empty response')
-        const recs = parseRecommendationResponse(unwrapRecommendationArrayPayload(text))
-        for (const rec of recs) onRecommendation(rec)
-        return recs
-      }
-      let content = ''
-      for await (const line of readLines(res.body)) {
-        if (!line.startsWith('data:')) continue
-        const payload = line.slice(5).trim()
-        if (payload === '[DONE]') break
-        try {
-          const chunk = JSON.parse(payload) as {
-            choices?: Array<{ delta?: { content?: string } }>
-            usage?: { prompt_tokens?: number; completion_tokens?: number }
-          }
-          const delta = chunk.choices?.[0]?.delta?.content ?? ''
-          content += delta
-          parser.push(delta)
-          if (chunk.usage) {
-            this.lastUsage = {
-              provider: 'openai-compatible',
+    return withTimeout(
+      this.timeoutMs,
+      'OpenAI-Compatible recommendation request',
+      async (signal) => {
+        const res = await fetchWithRetry(
+          this.chatCompletionsUrl,
+          {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
               model: this.model,
-              inputTokens: chunk.usage.prompt_tokens,
-              outputTokens: chunk.usage.completion_tokens,
-            }
-          }
-        } catch {
-          // keep-alive comments / partial frames
+              messages: [
+                { role: 'system', content: 'Respond with a JSON array only.' },
+                { role: 'user', content: prompt },
+              ],
+              max_completion_tokens: 4096,
+              stream: true,
+            }),
+            signal: signal,
+          },
+          { providerLabel: 'openai-compatible' },
+        )
+        if (!res.body) throw new Error('Empty response')
+        // Some "compatible" servers ignore stream:true and answer with one
+        // plain JSON body -- handle that the same as getRecommendations.
+        if (!(res.headers.get('content-type') ?? '').includes('text/event-stream')) {
+          const data = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+          const text = data.choices?.[0]?.message?.content
+          if (!text) throw new Error('Empty response')
+          const recs = parseRecommendationResponse(unwrapRecommendationArrayPayload(text))
+          for (const rec of recs) onRecommendation(rec)
+          return recs
         }
-      }
-      if (!content) throw new Error('Empty response')
-      return parseRecommendationResponse(unwrapRecommendationArrayPayload(content))
-    } catch (err: unknown) {
-      if (controller.signal.aborted) {
-        throw new Error(timeoutMessage('recommendation request', this.timeoutMs))
-      }
-      throw err
-    } finally {
-      clearTimeout(timer)
-    }
+        let content = ''
+        for await (const line of readLines(res.body)) {
+          if (!line.startsWith('data:')) continue
+          const payload = line.slice(5).trim()
+          if (payload === '[DONE]') break
+          try {
+            const chunk = JSON.parse(payload) as {
+              choices?: Array<{ delta?: { content?: string } }>
+              usage?: { prompt_tokens?: number; completion_tokens?: number }
+            }
+            const delta = chunk.choices?.[0]?.delta?.content ?? ''
+            content += delta
+            parser.push(delta)
+            if (chunk.usage) {
+              this.lastUsage = {
+                provider: 'openai-compatible',
+                model: this.model,
+                inputTokens: chunk.usage.prompt_tokens,
+                outputTokens: chunk.usage.completion_tokens,
+              }
+            }
+          } catch {
+            // keep-alive comments / partial frames
+          }
+        }
+        if (!content) throw new Error('Empty response')
+        return parseRecommendationResponse(unwrapRecommendationArrayPayload(content))
+      },
+    )
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {
@@ -206,7 +191,7 @@ export class OpenAICompatibleProvider implements RecommendationProvider {
       return {
         success: false,
         message: controller.signal.aborted
-          ? timeoutMessage('connection test', this.timeoutMs)
+          ? timeoutMessage('OpenAI-Compatible connection test', this.timeoutMs)
           : errMsg(err),
       }
     } finally {

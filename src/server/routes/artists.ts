@@ -5,6 +5,7 @@ import { createDeezerClient } from '@/core/clients/deezer'
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
 import { getAlbumTracksRankedByPopularity } from '@/core/clients/spotify'
 import { createWikidataClient } from '@/core/clients/wikidata'
+import { isValidMbid } from '@/core/validation'
 import type { TopTrack, TopTracksCache } from '@/db/schema'
 import { artists } from '@/db/schema'
 import type { AppDependencies } from '@/server'
@@ -172,10 +173,7 @@ export function artistRoutes(deps: AppDependencies) {
         return c.json({ error: 'Invalid preview URL' }, 400)
       }
       try {
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 10_000)
-        const res = await fetch(url, { signal: controller.signal })
-        clearTimeout(timer)
+        const res = await fetch(url, { signal: AbortSignal.timeout(10_000) })
         const contentType = res.headers.get('Content-Type') ?? ''
         if (!res.ok || !contentType.startsWith('audio/')) {
           return c.json({ error: 'Preview not available', status: res.status, contentType }, 502)
@@ -263,7 +261,7 @@ export function artistRoutes(deps: AppDependencies) {
 
   router.get('/api/v1/albums/:mbid', async (c) => {
     const mbid = c.req.param('mbid')
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(mbid)) {
+    if (!isValidMbid(mbid)) {
       return c.json({ error: 'Invalid MBID format' }, 400)
     }
     // An artist's discography barely changes; one live MusicBrainz call

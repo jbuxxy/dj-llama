@@ -151,7 +151,7 @@ describe('GeminiProvider', () => {
 
     try {
       const pending = provider.getRecommendations(sampleProfile)
-      const rejection = expect(pending).rejects.toThrow(/abort/i)
+      const rejection = expect(pending).rejects.toThrow(/timed out/i)
       await vi.advanceTimersByTimeAsync(1000)
       await rejection
       expect(fetchSpy).toHaveBeenCalledTimes(1)

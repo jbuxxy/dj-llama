@@ -6,13 +6,12 @@ import type { HonoEnv } from '@/server/types'
 
 function makeApp(
   getUserById: (id: number) => Promise<{ isAdmin: boolean } | null>,
-  ctx: { userId?: number; legacyTokenAuth?: boolean; authSkipped?: boolean } = {},
+  ctx: { userId?: number; legacyTokenAuth?: boolean } = {},
 ) {
   const app = new Hono<HonoEnv>()
   app.use('*', async (c, next) => {
     if (ctx.userId !== undefined) c.set('userId', ctx.userId)
     if (ctx.legacyTokenAuth !== undefined) c.set('legacyTokenAuth', ctx.legacyTokenAuth)
-    if (ctx.authSkipped !== undefined) c.set('authSkipped', ctx.authSkipped)
     await next()
   })
   app.use('*', adminGuard(getUserById))
@@ -58,26 +57,12 @@ describe('adminGuard', () => {
     expect(res.status).toBe(200)
     expect(await res.text()).toBe('ok')
   })
-
-  it('allows requests through when authSkipped is set, without checking admin status', async () => {
-    const getUserById = vi.fn(async () => ({ isAdmin: false }))
-    const app = makeApp(getUserById, { authSkipped: true })
-    const res = await app.request('/admin-only')
-    expect(res.status).toBe(200)
-    expect(getUserById).not.toHaveBeenCalled()
-  })
 })
 
 describe('resolveAdmin', () => {
-  it('returns true when authSkipped, without calling getUserById', async () => {
-    const getUserById = vi.fn(async () => null)
-    await expect(resolveAdmin(undefined, getUserById, true)).resolves.toBe(true)
-    expect(getUserById).not.toHaveBeenCalled()
-  })
-
   it('returns false for legacy-token auth', async () => {
     const getUserById = vi.fn(async () => ({ isAdmin: true }))
-    await expect(resolveAdmin(1, getUserById, false, true)).resolves.toBe(false)
+    await expect(resolveAdmin(1, getUserById, true)).resolves.toBe(false)
     expect(getUserById).not.toHaveBeenCalled()
   })
 

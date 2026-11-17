@@ -1,4 +1,5 @@
 import { type createMusicBrainzClient, parseYear } from '@/core/clients/musicbrainz'
+import { errMsg, isValidMbid } from '@/core/validation'
 import { normalizeAlbumTitle } from './normalize'
 import type { LibraryAlbum } from './sources/types'
 
@@ -6,8 +7,6 @@ type MBClient = Pick<
   ReturnType<typeof createMusicBrainzClient>,
   'getReleaseGroups' | 'searchReleaseGroupByTitle'
 >
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export type ReconciledAlbum = {
   sourceAlbumId: string
@@ -70,7 +69,7 @@ export async function reconcileAlbumsForArtist(
   } catch (err) {
     deps.onMbError?.(err)
     console.warn(
-      `[library-reconcile] MB getReleaseGroups failed for artist ${artistMbid}; albums left unreconciled: ${err instanceof Error ? err.message : String(err)}`,
+      `[library-reconcile] MB getReleaseGroups failed for artist ${artistMbid}; albums left unreconciled: ${errMsg(err)}`,
     )
     releaseGroups = []
   }
@@ -78,10 +77,9 @@ export async function reconcileAlbumsForArtist(
   return Promise.all(
     albums.map(async (album) => {
       const titleNormalized = normalizeAlbumTitle(album.title)
-      const direct =
-        typeof album.mbid === 'string' && UUID_RE.test(album.mbid)
-          ? releaseGroups.find((rg) => rg.id === album.mbid)
-          : undefined
+      const direct = isValidMbid(album.mbid)
+        ? releaseGroups.find((rg) => rg.id === album.mbid)
+        : undefined
 
       if (direct) {
         return makeRow(
@@ -115,7 +113,7 @@ export async function reconcileAlbumsForArtist(
         } catch (err) {
           deps.onMbError?.(err)
           console.warn(
-            `[library-reconcile] MB searchReleaseGroupByTitle failed for "${album.title}" (artist ${artistMbid}); leaving unreconciled: ${err instanceof Error ? err.message : String(err)}`,
+            `[library-reconcile] MB searchReleaseGroupByTitle failed for "${album.title}" (artist ${artistMbid}); leaving unreconciled: ${errMsg(err)}`,
           )
         }
       }

@@ -21,6 +21,7 @@ import {
   isActive,
   useActivity,
 } from '../lib/activity'
+import { formatElapsedSeconds } from '../lib/format-time'
 import { cn } from '../lib/utils'
 
 const KIND_ICON: Record<ActivityKind, typeof Activity> = {
@@ -35,13 +36,8 @@ const KIND_ICON: Record<ActivityKind, typeof Activity> = {
   taste_profile: Sparkles,
 }
 
-export function formatElapsed(fromIso: string, toMs: number): string {
-  const seconds = Math.max(0, Math.round((toMs - Date.parse(fromIso)) / 1000))
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  if (m === 0) return `${s}s`
-  if (m < 60) return `${m}m ${s.toString().padStart(2, '0')}s`
-  return `${Math.floor(m / 60)}h ${(m % 60).toString().padStart(2, '0')}m`
+function formatElapsed(fromIso: string, toMs: number): string {
+  return formatElapsedSeconds((toMs - Date.parse(fromIso)) / 1000)
 }
 
 function useNow(active: boolean): number {

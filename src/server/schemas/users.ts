@@ -1,12 +1,5 @@
 import * as z from 'zod'
-import { passwordSchema, usernameSchema } from './auth'
 import { idParamSchema } from './validator'
-
-export const createUserSchema = z.object({
-  username: usernameSchema,
-  password: passwordSchema,
-  isAdmin: z.boolean().optional().default(false),
-})
 
 // PATCH body: keep shape strict so future additions are a deliberate choice,
 // not a silent expansion.

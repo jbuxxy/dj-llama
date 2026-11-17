@@ -359,8 +359,9 @@ async function buildResolvedArtist(
   const tags = (mbArtist.tags ?? []).map((t) => t.name)
   const streamingUrls = mb.extractStreamingUrls(mbArtist.relations ?? [])
 
-  // AudioDB first, then Lidarr -> fanart.tv -> musicinfo.pro
-  const imageResult = await fetchArtistImageCached(
+  // AudioDB first, then Lidarr -> fanart.tv -> musicinfo.pro. Independent of
+  // the MusicBrainz album match below, so it runs alongside it.
+  const imagePromise = fetchArtistImageCached(
     mbArtist.id,
     mbArtist.name,
     audiodb,
@@ -408,6 +409,8 @@ async function buildResolvedArtist(
       releaseDate = resolvedAlbum.firstReleaseDate
     }
   }
+
+  const imageResult = await imagePromise
 
   return {
     mbid: mbArtist.id,

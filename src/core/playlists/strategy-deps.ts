@@ -111,6 +111,13 @@ export function buildStrategyDeps(
     return [...byName.values()].slice(0, MAX_CANDIDATE_POOL)
   }
 
+  function loadLibraryGenres(uid: number) {
+    return db
+      .select({ name: libraryArtists.name, genres: libraryArtists.genres })
+      .from(libraryArtists)
+      .where(eq(libraryArtists.userId, uid))
+  }
+
   async function getTrackTasteWeightedArtists(opts: {
     limit?: number
     genreKeywords?: string[]
@@ -144,14 +151,19 @@ export function buildStrategyDeps(
     const sources = registry.all()
     if (sources.length === 0) return []
 
-    const { tracks: liked } = await collectLikedTracks(sources)
-    const plexWebhookPlays = await getRecentPlexScrobbles(db, userId, 100)
-    const recentPlays = await collectRecentPlays(sources, 100, plexWebhookPlays)
-
-    const { items: requestRows } = await listRequestsForUser(db, userId, { limit: 50 })
+    // All independent reads -- Plex favourites and history are the slow
+    // ones, so nothing should queue behind them.
+    const [{ tracks: liked }, recentPlays, { items: requestRows }, popularityMap, genreRows] =
+      await Promise.all([
+        collectLikedTracks(sources),
+        getRecentPlexScrobbles(db, userId, 100).then((plays) =>
+          collectRecentPlays(sources, 100, plays),
+        ),
+        listRequestsForUser(db, userId, { limit: 50 }),
+        getPopularityMap(db),
+        loadLibraryGenres(userId),
+      ])
     const requestHistory: RequestHistoryEntry[] = toRequestHistoryEntries(requestRows)
-
-    const popularityMap = await getPopularityMap(db)
     const profile = buildTrackTasteProfile(
       liked,
       recentPlays,
@@ -173,10 +185,6 @@ export function buildStrategyDeps(
       }
     }
 
-    const genreRows = await db
-      .select({ name: libraryArtists.name, genres: libraryArtists.genres })
-      .from(libraryArtists)
-      .where(eq(libraryArtists.userId, userId))
     const genresByName = new Map(
       genreRows.map((r) => [r.name.trim().toLowerCase(), r.genres ?? []]),
     )
@@ -251,9 +259,13 @@ export function buildStrategyDeps(
     const sources = registry.all()
     if (sources.length === 0) return []
 
-    const { tracks: liked } = await collectLikedTracks(sources)
-    const plexWebhookPlays = await getRecentPlexScrobbles(db, userId, 300)
-    const recentPlays = await collectRecentPlays(sources, 300, plexWebhookPlays)
+    const [{ tracks: liked }, recentPlays, genreRows] = await Promise.all([
+      collectLikedTracks(sources),
+      getRecentPlexScrobbles(db, userId, 300).then((plays) =>
+        collectRecentPlays(sources, 300, plays),
+      ),
+      loadLibraryGenres(userId),
+    ])
 
     // Anything played inside the dormant window is, by definition, not
     // dormant -- exclude it entirely rather than just ranking it lower.
@@ -289,10 +301,6 @@ export function buildStrategyDeps(
       }
     }
 
-    const genreRows = await db
-      .select({ name: libraryArtists.name, genres: libraryArtists.genres })
-      .from(libraryArtists)
-      .where(eq(libraryArtists.userId, userId))
     const genresByName = new Map(
       genreRows.map((r) => [r.name.trim().toLowerCase(), r.genres ?? []]),
     )

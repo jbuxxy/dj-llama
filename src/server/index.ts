@@ -6,6 +6,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { secureHeaders } from 'hono/secure-headers'
 import { envConfig } from '@/config/env'
+import { errMsg } from '@/core/validation'
 import { VERSION } from '@/version'
 import { openapiDoc } from './helpers/openapi-doc'
 import { problem } from './helpers/problem'
@@ -38,7 +39,6 @@ import { lidarrRoutes } from './routes/lidarr'
 import { listeningRoutes } from './routes/listening'
 import { mediaRoutes } from './routes/media'
 import { moodRoutes } from './routes/mood'
-import { oauthRoutes } from './routes/oauth'
 import { pipelineRoutes } from './routes/pipeline'
 import { playlistRoutes } from './routes/playlists'
 import { realtimeRoutes } from './routes/realtime'
@@ -89,7 +89,7 @@ export function createApp(deps: AppDependencies) {
       if (res.headers.get('content-type')?.includes('application/json')) return res
       return problem(c, `http-${err.status}`, err.message || 'HTTP Error', err.status, undefined)
     }
-    const msg = err instanceof Error ? err.message : String(err)
+    const msg = errMsg(err)
     console.error('[server] unhandled error:', msg, err instanceof Error ? err.stack : '')
     return problem(c, 'internal-error', 'Internal Server Error', 500)
   })
@@ -238,7 +238,7 @@ export function createApp(deps: AppDependencies) {
       // predicate is the same "is AI configured" check used in Settings and
       // the pipeline route.
       aiRequired: !(settings?.aiProvider && settings.aiModel),
-      // DJ Llama fork: always required, even with zero users -- there's no
+      // Always required, even with zero users -- there's no
       // "no auth configured yet" bootstrap window, since Plex sign-in (not
       // an unauthenticated first-run wizard) is what creates the first
       // (admin) account. See routes/auth-plex.ts.
@@ -311,7 +311,6 @@ export function createApp(deps: AppDependencies) {
   )
   app.use('/api/v1/pipeline/rescan', rateLimiter({ windowMs: 60_000, max: 2, keyPrefix: 'rscn' }))
   app.route('/', authRoutes(deps))
-  app.route('/', oauthRoutes(deps))
   app.route('/', webhookRoutes(deps))
   app.route('/', healthRoutes({ db: deps.db }))
   app.route('/', setupRoutes(deps))

@@ -1,4 +1,5 @@
 import type { DiscoverySource, LikedTrackEntry, RecentlyAddedEntry } from '@/core/plugins/types'
+import { errMsg } from '@/core/validation'
 import type { RecentPlayEntry } from './track-taste'
 
 export type CollectLikedTracksResult = {
@@ -32,7 +33,7 @@ export async function collectLikedTracks(
     const sourceId = withLikedTracks[i]?.id ?? 'unknown'
     if (r?.status !== 'fulfilled') {
       const reason = r && r.status === 'rejected' ? r.reason : 'unknown'
-      const msg = reason instanceof Error ? reason.message : String(reason)
+      const msg = errMsg(reason)
       console.warn(`[collect-tracks] source ${sourceId} failed: ${msg}`)
       continue
     }
@@ -74,7 +75,7 @@ export async function collectRecentPlays(
     const sourceId = pollSources[i]?.id ?? 'unknown'
     if (r?.status !== 'fulfilled') {
       const reason = r && r.status === 'rejected' ? r.reason : 'unknown'
-      const msg = reason instanceof Error ? reason.message : String(reason)
+      const msg = errMsg(reason)
       console.warn(`[collect-tracks] source ${sourceId} getRecentListening failed: ${msg}`)
       continue
     }
@@ -107,7 +108,7 @@ export async function collectRecentlyAdded(
     const sourceId = withRecentlyAdded[i]?.id ?? 'unknown'
     if (r?.status !== 'fulfilled') {
       const reason = r && r.status === 'rejected' ? r.reason : 'unknown'
-      const msg = reason instanceof Error ? reason.message : String(reason)
+      const msg = errMsg(reason)
       console.warn(`[collect-tracks] source ${sourceId} getRecentlyAdded failed: ${msg}`)
       continue
     }

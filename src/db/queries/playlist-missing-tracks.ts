@@ -120,6 +120,19 @@ export async function fillMissingTrackCovers(
   }
 }
 
+/** Which of `playlistIds` currently have at least one missing track. */
+export async function getPlaylistIdsWithMissingTracks(
+  db: Database,
+  playlistIds: number[],
+): Promise<Set<number>> {
+  if (playlistIds.length === 0) return new Set()
+  const rows = await db
+    .selectDistinct({ playlistId: playlistMissingTracks.playlistId })
+    .from(playlistMissingTracks)
+    .where(inArray(playlistMissingTracks.playlistId, playlistIds))
+  return new Set(rows.map((r) => r.playlistId))
+}
+
 export async function listPlaylistMissingTracks(
   db: Database,
   playlistId: number,

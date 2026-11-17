@@ -76,21 +76,6 @@ export function resolveImageUrl(url: string | undefined, baseUrl: string): strin
   return `${baseUrl}${url.startsWith('/') ? '' : '/'}${url}`
 }
 
-// Track search resolves a MusicBrainz recording to every album it appears
-// on, then dedupes across all resolved recordings and sorts the same way
-// pickBestReleaseGroup does for track-based recommendations (resolve.ts):
-// real studio albums first, EPs next, singles/other after, anything with a
-// secondary type (Compilation/Live/etc.) last.
-export function releaseGroupTier(entry: {
-  primaryType: string
-  secondaryTypes?: string[]
-}): number {
-  if (entry.secondaryTypes?.length) return 3
-  if (entry.primaryType === 'Album') return 0
-  if (entry.primaryType === 'EP') return 1
-  return 2
-}
-
 export function tokenize(text: string): string[] {
   return text
     .toLowerCase()

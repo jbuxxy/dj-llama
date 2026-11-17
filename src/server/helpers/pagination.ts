@@ -12,14 +12,6 @@ export type PaginationParams = {
   cursor: Cursor | null
 }
 
-export type Paginated<T> = {
-  data: T[]
-  meta: {
-    limit: number
-    nextCursor: string | null
-  }
-}
-
 /** Returns `{limit, cursor}` when either query param is present, `null` otherwise. */
 export function readPagination(
   c: Context,

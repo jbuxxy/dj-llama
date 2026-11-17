@@ -21,7 +21,7 @@ export function RejectionPicker({ open, onClose, onSubmit, artistName }: Props) 
   const titleId = useId()
   const [reason, setReason] = useState<RejectionReason | null>(null)
   const [reasonText, setReasonText] = useState('')
-  const [permanent, setPermanent] = useState(false)
+  const [permanentChoice, setPermanent] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const firstRadioRef = useRef<HTMLButtonElement | null>(null)
 
@@ -37,11 +37,9 @@ export function RejectionPicker({ open, onClose, onSubmit, artistName }: Props) 
     }
   }, [open])
 
-  // not_right_now is incompatible with permanent: drop the flag if user
-  // back-tracks into that combination.
-  useEffect(() => {
-    if (reason === 'not_right_now' && permanent) setPermanent(false)
-  }, [reason, permanent])
+  // not_right_now is incompatible with permanent, so that reason always
+  // switches the flag off.
+  const permanent = permanentChoice && reason !== 'not_right_now'
 
   useEffect(() => {
     if (!open) return

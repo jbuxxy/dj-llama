@@ -8,7 +8,7 @@ import {
 import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
 import { RecommendationStreamParser } from './stream-parse'
-import { timeoutSecondsWithDefaultToMs } from './timeout'
+import { timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const DEFAULT_MODEL = 'gemini-3-flash-preview'
@@ -103,9 +103,7 @@ export class GeminiProvider implements RecommendationProvider {
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
     this.lastUsage = null
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
+    return withTimeout(this.timeoutMs, 'Gemini recommendation request', async (signal) => {
       const res = await fetchWithRetry(
         `${API_BASE}/${this.model}:generateContent`,
         {
@@ -115,7 +113,7 @@ export class GeminiProvider implements RecommendationProvider {
             'x-goog-api-key': this.apiKey,
           },
           body: this.requestBody(profile),
-          signal: controller.signal,
+          signal: signal,
         },
         { providerLabel: 'gemini' },
       )
@@ -128,9 +126,7 @@ export class GeminiProvider implements RecommendationProvider {
       // responseSchema does not guarantee well-formed output (truncation at
       // maxOutputTokens); the shared parser fails with a clear message instead.
       return parseRecommendationResponse(text)
-    } finally {
-      clearTimeout(timer)
-    }
+    })
   }
 
   async streamRecommendations(
@@ -139,9 +135,7 @@ export class GeminiProvider implements RecommendationProvider {
   ): Promise<AiRecommendation[]> {
     this.lastUsage = null
     const parser = new RecommendationStreamParser(onRecommendation)
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
+    return withTimeout(this.timeoutMs, 'Gemini recommendation request', async (signal) => {
       const res = await fetchWithRetry(
         `${API_BASE}/${this.model}:streamGenerateContent?alt=sse`,
         {
@@ -151,7 +145,7 @@ export class GeminiProvider implements RecommendationProvider {
             'x-goog-api-key': this.apiKey,
           },
           body: this.requestBody(profile),
-          signal: controller.signal,
+          signal: signal,
         },
         { providerLabel: 'gemini' },
       )
@@ -172,9 +166,7 @@ export class GeminiProvider implements RecommendationProvider {
       }
       if (!content) throw new Error('Empty response from Gemini')
       return parseRecommendationResponse(content)
-    } finally {
-      clearTimeout(timer)
-    }
+    })
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {

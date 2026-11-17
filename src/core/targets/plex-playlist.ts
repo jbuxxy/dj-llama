@@ -196,7 +196,7 @@ function createPlexHelpers(config: PlexPlaylistConfig) {
     try {
       return { candidates: toCandidates(await searchHubTracks(query)) }
     } catch (err) {
-      return { candidates: [], error: err instanceof Error ? err.message : String(err) }
+      return { candidates: [], error: errMsg(err) }
     }
   }
 

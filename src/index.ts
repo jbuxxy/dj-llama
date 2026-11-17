@@ -136,6 +136,7 @@ import { getCachedLidarrIds } from './db/queries/lidarr-cache'
 import {
   deletePlaylistMissingTrack,
   fillMissingTrackCovers,
+  getPlaylistIdsWithMissingTracks,
   listPlaylistMissingTracks,
   type MissingTrackWithResolution,
   reconcilePlaylistMissingTracks,
@@ -542,13 +543,19 @@ async function runLibraryWebhookRefresh(): Promise<void> {
       }
 
       // New library media can also resolve an imported playlist's own
-      // missing-tracks list -- re-run every enabled imported playlist through
-      // the same path the Generate button uses. Best-effort per playlist so
-      // one bad import doesn't block the rest.
+      // missing-tracks list -- re-run the enabled imported playlists that
+      // still have missing tracks through the same path the Generate button
+      // uses (one with nothing missing has nothing new media could fix; its
+      // schedule keeps it in sync). Best-effort per playlist so one bad
+      // import doesn't block the rest.
       for (const user of users) {
         const userPlaylists = await getPlaylistsByUser(db, user.id)
-        const importedPlaylists = userPlaylists.filter((p) => p.strategy === 'import' && p.enabled)
-        for (const p of importedPlaylists) {
+        const imports = userPlaylists.filter((p) => p.strategy === 'import' && p.enabled)
+        const withMissing = await getPlaylistIdsWithMissingTracks(
+          db,
+          imports.map((p) => p.id),
+        )
+        for (const p of imports.filter((p) => withMissing.has(p.id))) {
           try {
             await executePlaylistGeneration(p.id)
           } catch (err) {
@@ -586,7 +593,7 @@ const runPipeline = async () => {
 // createLidarrTarget()'s underlying client caches Lidarr's quality/metadata
 // profiles and root folders in memory (see clients/lidarr.ts), but that
 // cache only lives as long as the client instance -- and a fresh instance
-// was being built on every single call to getEnabledTargetsForResolvedUser
+// was being built on every single call to getEnabledTargets
 // (i.e. every approve), throwing the cache away immediately after it was
 // populated. A 50-item Approve All was refetching those 3 endpoints ~50
 // times over instead of once. Memoize the target across calls, keyed by the
@@ -638,12 +645,8 @@ function getCachedOrFreshLidarrTarget(
 
 // Lidarr is a global, admin-configured connection (settings), not a
 // per-user manual target -- every user gets the SAME target here, via
-// the system target row (see db/queries/targets.ts). The userId parameter
-// is kept only so callers (recommendation-approve, auto-approve) don't need
-// to change; nothing here is actually scoped by it anymore.
-async function getEnabledTargetsForResolvedUser(
-  _userId: number,
-): Promise<import('./core/targets/types').DestinationTarget[]> {
+// the system target row (see db/queries/targets.ts).
+async function getEnabledTargets(): Promise<import('./core/targets/types').DestinationTarget[]> {
   const settings = await getSettings(db)
   const prefs = (settings?.preferences ?? {}) as Record<string, unknown>
 
@@ -828,33 +831,40 @@ async function albumHasTrack(
 // isn't a recognized stripSearchQualifier keyword. Only stripping the
 // source side (never the file side) preserves the remix/instrumental
 // rejection above: a file's own extra parenthetical still disqualifies it.
-async function findExistingTrackFile(
-  lidarr: ReturnType<typeof createLidarrClient>,
-  lidarrArtistId: number,
-  trackName: string,
-): Promise<boolean> {
-  const stripped = stripSearchQualifier(trackName)
-  const target = normalizeForMatch(stripped)
-  const genericStripped = stripTrailingParenthetical(stripped)
-  const targetGeneric = genericStripped !== stripped ? normalizeForMatch(genericStripped) : null
-  const albums = await lidarr.getAlbums(lidarrArtistId).catch(() => [])
-  for (const album of albums) {
-    if (!album.statistics?.trackFileCount) continue
-    const tracks = await lidarr.getTracks(album.id).catch(() => [])
-    if (
-      tracks.some((t) => {
-        if (!t.hasFile) return false
-        const normalizedTitle = normalizeForMatch(t.title)
-        return (
-          normalizedTitle === target ||
-          (targetGeneric !== null && normalizedTitle === targetGeneric)
-        )
-      })
-    ) {
-      return true
+//
+// Each call used to re-list the artist's albums and every album's tracks, so
+// a playlist missing several songs by one artist repeated the same Lidarr
+// calls per song. The checker caches each artist's downloaded titles for the
+// lifetime of one run.
+function createExistingTrackFileChecker(lidarr: ReturnType<typeof createLidarrClient>) {
+  const downloadedTitles = new Map<number, Promise<Set<string>>>()
+
+  async function loadDownloadedTitles(lidarrArtistId: number): Promise<Set<string>> {
+    const titles = new Set<string>()
+    const albums = await lidarr.getAlbums(lidarrArtistId).catch(() => [])
+    for (const album of albums) {
+      if (!album.statistics?.trackFileCount) continue
+      const tracks = await lidarr.getTracks(album.id).catch(() => [])
+      for (const t of tracks) if (t.hasFile) titles.add(normalizeForMatch(t.title))
     }
+    return titles
   }
-  return false
+
+  return async function hasExistingTrackFile(
+    lidarrArtistId: number,
+    trackName: string,
+  ): Promise<boolean> {
+    let pending = downloadedTitles.get(lidarrArtistId)
+    if (!pending) {
+      pending = loadDownloadedTitles(lidarrArtistId)
+      downloadedTitles.set(lidarrArtistId, pending)
+    }
+    const titles = await pending
+    const stripped = stripSearchQualifier(trackName)
+    if (titles.has(normalizeForMatch(stripped))) return true
+    const genericStripped = stripTrailingParenthetical(stripped)
+    return genericStripped !== stripped && titles.has(normalizeForMatch(genericStripped))
+  }
 }
 
 async function autoRequestMissingPlaylistTracks(
@@ -876,6 +886,8 @@ async function autoRequestMissingPlaylistTracks(
     settings.lidarrApiKey,
     settings.skipTlsVerify ?? false,
   )
+  const hasExistingTrackFile = createExistingTrackFileChecker(lidarr)
+
   const mbClient = createMusicBrainzClient()
   const prefs = mergePreferences(settings.preferences)
   const addOptions = {
@@ -955,11 +967,11 @@ async function autoRequestMissingPlaylistTracks(
     checkedCount++
     onProgress?.(`Finding the album for "${track.trackName}"`, checkedCount, missing.length)
     // Skip resolution entirely when the artist's Lidarr catalog already has
-    // a real downloaded file for this exact song -- see findExistingTrackFile's
+    // a real downloaded file for this exact song -- see createExistingTrackFileChecker's
     // doc comment. Only checked when the artist is already known to Lidarr;
     // nothing to check against otherwise.
     const knownArtist = knownArtistsByName.get(normalizeArtistName(track.artistName))
-    if (knownArtist && (await findExistingTrackFile(lidarr, knownArtist.id, track.trackName))) {
+    if (knownArtist && (await hasExistingTrackFile(knownArtist.id, track.trackName))) {
       alreadyDownloadedCount++
       continue
     }
@@ -1382,7 +1394,7 @@ async function autoRequestMissingPlaylistTracks(
         continue
       }
 
-      const targets = await getEnabledTargetsForResolvedUser(ownerId)
+      const targets = await getEnabledTargets()
       const result = await approveAlbumToTargets(
         {
           artistMbid: requestRow.artistMbid,
@@ -2642,7 +2654,7 @@ const appDeps: AppDependencies = {
     getJobById: (id) => jobQueries.getJobById(db, id),
     getJobHealth: (nextRun) => jobQueries.getJobHealth(db, nextRun),
   },
-  getEnabledTargetsForUser: (userId) => getEnabledTargetsForResolvedUser(userId),
+  getEnabledTargetsForUser: () => getEnabledTargets(),
   playlistDeps: {
     db,
     playlistScheduler,

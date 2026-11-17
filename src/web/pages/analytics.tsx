@@ -10,15 +10,7 @@ import {
   getAnalyticsOverview,
   getApprovalTrend,
 } from '../lib/api'
-import { formatDate, formatDateTime } from '../lib/intl'
-
-function formatAnalyticsDate(dateStr: string): string {
-  return formatDateTime(dateStr)
-}
-
-function formatAnalyticsShortDate(dateStr: string): string {
-  return formatDate(dateStr, { month: 'short', day: 'numeric' })
-}
+import { formatDateTime, formatShortDate } from '../lib/intl'
 
 function pct(value: number): string {
   return `${Math.round(value * 100)}%`
@@ -40,7 +32,7 @@ function DiscoveryChart({ batches }: { batches: AnalyticsBatch[] }) {
             <div
               key={b.id}
               className="flex-1 h-full flex flex-col justify-end group relative"
-              title={`${formatAnalyticsDate(b.createdAt)}: ${b.total} recs (${b.approved} approved)`}
+              title={`${formatDateTime(b.createdAt)}: ${b.total} recs (${b.approved} approved)`}
             >
               <div
                 className="w-full rounded-t bg-accent/30"
@@ -52,8 +44,8 @@ function DiscoveryChart({ batches }: { batches: AnalyticsBatch[] }) {
         })}
       </div>
       <div className="flex justify-between mt-2 text-micro text-muted">
-        <span>{firstDate ? formatAnalyticsShortDate(firstDate) : ''}</span>
-        <span>{lastDate ? formatAnalyticsShortDate(lastDate) : ''}</span>
+        <span>{firstDate ? formatShortDate(firstDate) : ''}</span>
+        <span>{lastDate ? formatShortDate(lastDate) : ''}</span>
       </div>
     </div>
   )
@@ -169,14 +161,14 @@ function ApprovalTrendChart({ trend }: { trend: ApprovalTrend[] }) {
               key={p.batchId}
               className="absolute h-2 w-2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-approve"
               style={{ left: `${xOf(i)}%`, top: `${yOf(p.running)}%` }}
-              title={`${formatAnalyticsShortDate(p.createdAt)}: ${p.approved} of ${p.acted} approved · ${pct(p.running)} overall`}
+              title={`${formatShortDate(p.createdAt)}: ${p.approved} of ${p.acted} approved · ${pct(p.running)} overall`}
             />
           ))}
         </div>
       </div>
       <div className="mt-1.5 flex justify-between pl-9 text-micro text-muted">
-        <span>{firstDate ? formatAnalyticsShortDate(firstDate) : ''}</span>
-        <span>{lastDate ? formatAnalyticsShortDate(lastDate) : ''}</span>
+        <span>{firstDate ? formatShortDate(firstDate) : ''}</span>
+        <span>{lastDate ? formatShortDate(lastDate) : ''}</span>
       </div>
     </div>
   )

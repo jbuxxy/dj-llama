@@ -39,21 +39,8 @@ import {
   updateRecommendation,
 } from '../lib/api'
 import { reportApprovalOutcome } from '../lib/approval'
+import { formatRelativeTime } from '../lib/format-time'
 import { useStartScan } from '../lib/use-start-scan'
-
-function formatRelativeTime(dateStr: string | Date): string {
-  const diffMs = new Date(dateStr).getTime() - Date.now()
-  const diffMinutes = Math.round(diffMs / 60_000)
-  const formatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto' })
-
-  if (Math.abs(diffMinutes) < 1) return formatter.format(0, 'second')
-  if (Math.abs(diffMinutes) < 60) return formatter.format(diffMinutes, 'minute')
-
-  const diffHours = Math.round(diffMinutes / 60)
-  if (Math.abs(diffHours) < 24) return formatter.format(diffHours, 'hour')
-
-  return formatter.format(Math.round(diffHours / 24), 'day')
-}
 
 // Every dashboard card except Today's Pick collapses through this, with
 // state persisted per-user (see useCollapsedSections) so it survives a

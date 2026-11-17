@@ -3,7 +3,7 @@ import { Hono } from 'hono'
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie'
 import * as z from 'zod'
 import { envConfig } from '@/config/env'
-import { hashPassword } from '@/core/auth'
+import { unusablePasswordHash } from '@/core/auth'
 import {
   buildPlexAuthAppUrl,
   checkPlexPin,
@@ -260,7 +260,7 @@ export function plexAuthRoutes(deps: { db: Database }) {
       if (!user) {
         user = await createUser(deps.db, {
           username: account.username,
-          passwordHash: hashPassword(crypto.randomUUID()),
+          passwordHash: unusablePasswordHash(),
           isAdmin: false,
           email: account.email ?? undefined,
           plexAccountId: account.id,
@@ -380,7 +380,7 @@ export function plexAuthRoutes(deps: { db: Database }) {
       try {
         const user = await createUser(deps.db, {
           username: account.username,
-          passwordHash: hashPassword(crypto.randomUUID()),
+          passwordHash: unusablePasswordHash(),
           isAdmin: true,
           isOwner: true,
           email: account.email ?? undefined,
@@ -397,7 +397,7 @@ export function plexAuthRoutes(deps: { db: Database }) {
         if (!isSingleOwnerCollision(err)) throw err
         const user = await createUser(deps.db, {
           username: account.username,
-          passwordHash: hashPassword(crypto.randomUUID()),
+          passwordHash: unusablePasswordHash(),
           isAdmin: false,
           email: account.email ?? undefined,
           plexAccountId: account.id,

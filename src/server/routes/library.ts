@@ -7,7 +7,7 @@ import type { SkyHookWarmer } from '@/core/library/skyhook-warmer'
 import type { LibrarySyncStore } from '@/core/library/store'
 import { SOURCE_NOT_CONFIGURED_ERROR, type SyncOrchestrator } from '@/core/library/sync'
 import type { HealthCheckId } from '@/core/library/types'
-import { errMsg, logAndSanitize } from '@/core/validation'
+import { errMsg, isValidMbid, logAndSanitize } from '@/core/validation'
 import type { Database } from '@/db'
 import { requireAdmin, requireSessionUser } from '@/server/helpers/require-user'
 import { rateLimiter } from '@/server/middleware/rate-limit'
@@ -21,7 +21,6 @@ import { zJson } from '@/server/schemas/validator'
 import type { HonoEnv } from '@/server/types'
 
 const VALID_CHECK_IDS: Set<string> = new Set(['missing-albums', 'genre-gaps'])
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 type LibraryRouteDeps = {
   db: Database
@@ -176,7 +175,7 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
         return c.json(summary, 202)
       }
     } catch (err) {
-      activity.fail(err instanceof Error ? err.message : String(err))
+      activity.fail(errMsg(err))
       throw err
     }
   })
@@ -193,7 +192,7 @@ export function libraryRoutes(deps: LibraryRouteDeps) {
     const auth = requireSessionUser(c)
     if (!auth.ok) return auth.response
     const artistMbid = c.req.param('artistMbid')
-    if (!UUID_RE.test(artistMbid)) {
+    if (!isValidMbid(artistMbid)) {
       return c.json({ error: 'artistMbid must be a valid UUID' }, 400)
     }
     const coverage = await deps.albumCoverage.getCoverageForArtist(auth.userId, artistMbid)

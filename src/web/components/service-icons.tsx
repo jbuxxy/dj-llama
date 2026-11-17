@@ -33,18 +33,6 @@ export function AiProviderIcon({ provider }: { provider?: string }) {
   return <ServiceLogo src="/icons/openai.png" alt="" />
 }
 
-export function SpotifyIcon() {
-  return <ServiceLogo src="/icons/spotify.svg" alt="Spotify" />
-}
-
-export function DeezerIcon() {
-  return <ServiceLogo src="/icons/deezer.svg" alt="Deezer" />
-}
-
-export function AppleMusicIcon() {
-  return <ServiceLogo src="/icons/apple-music.svg" alt="Apple Music" />
-}
-
 export function PlexIcon() {
   return <ServiceLogo src="/icons/plex.svg" alt="Plex" />
 }

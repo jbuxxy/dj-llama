@@ -1,4 +1,5 @@
 import type { Pool } from 'pg'
+import { errMsg } from '@/core/validation'
 
 const STARTUP_RETRY_INITIAL_MS = 1_000
 const STARTUP_RETRY_MAX_MS = 30_000
@@ -86,7 +87,7 @@ export async function waitForDatabase(
     } catch (err: unknown) {
       if (!isRetryableConnectionError(err)) throw err
       const code = (err as { code?: string }).code ?? 'n/a'
-      const msg = err instanceof Error ? err.message : String(err)
+      const msg = errMsg(err)
       console.warn(
         `[db] startup connect attempt ${attempt} failed (code=${code}): ${msg}; retrying in ${delay}ms`,
       )

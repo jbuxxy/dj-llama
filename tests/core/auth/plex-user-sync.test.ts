@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('@/core/auth', () => ({
-  hashPassword: vi.fn(() => 'hashed-random'),
+  unusablePasswordHash: vi.fn(() => 'hashed-random'),
 }))
 vi.mock('@/core/auth/plex', () => ({
   getPlexServerSharedUsers: vi.fn(),

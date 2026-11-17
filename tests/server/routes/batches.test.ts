@@ -15,11 +15,10 @@ function makeDeps(overrides: Partial<AppDependencies> = {}): AppDependencies {
   } as unknown as AppDependencies
 }
 
-function makeApp(deps: AppDependencies, opts: { userId?: number; authSkipped?: boolean } = {}) {
+function makeApp(deps: AppDependencies, opts: { userId?: number } = {}) {
   const app = new Hono<HonoEnv>()
   app.use('*', async (c, next) => {
     if (opts.userId !== undefined) c.set('userId', opts.userId)
-    if (opts.authSkipped) c.set('authSkipped', true)
     await next()
   })
   app.route('/', batchRoutes(deps))

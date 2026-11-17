@@ -260,12 +260,7 @@ export function settingsRoutes(deps: AppDependencies) {
 
   router.get('/api/v1/settings', async (c) => {
     const userId = c.get('userId')
-    const isAdmin = await resolveAdmin(
-      userId,
-      deps.getUserById,
-      c.get('authSkipped'),
-      c.get('legacyTokenAuth'),
-    )
+    const isAdmin = await resolveAdmin(userId, deps.getUserById, c.get('legacyTokenAuth'))
     const response = await buildSettingsResponse(deps, userId, isAdmin)
     if (!response) {
       return c.json({ error: 'Settings not found' }, 404)
@@ -565,12 +560,7 @@ export function settingsRoutes(deps: AppDependencies) {
     }
 
     const userId = c.get('userId')
-    const isAdmin = await resolveAdmin(
-      userId,
-      deps.getUserById,
-      c.get('authSkipped'),
-      c.get('legacyTokenAuth'),
-    )
+    const isAdmin = await resolveAdmin(userId, deps.getUserById, c.get('legacyTokenAuth'))
     const storedSettings =
       Object.hasOwn(sanitized, 'preferences') || Object.hasOwn(sanitized, 'skipTlsVerify')
         ? await deps.getSettings()
@@ -639,7 +629,7 @@ export function settingsRoutes(deps: AppDependencies) {
     }
 
     // Keep the system Lidarr target (see db/queries/targets.ts) in sync with
-    // settings.lidarrUrl/apiKey/skipTlsVerify -- getEnabledTargetsForResolvedUser
+    // settings.lidarrUrl/apiKey/skipTlsVerify -- getEnabledTargets (index.ts)
     // dispatches using this row's cached config, not settings directly, so
     // without this an admin rotating their Lidarr API key or URL here would
     // silently keep dispatching to the old one until the row is touched some
@@ -717,12 +707,7 @@ export function settingsRoutes(deps: AppDependencies) {
 
   router.post('/api/v1/settings/test/:service', async (c) => {
     const service = c.req.param('service')
-    const isAdmin = await resolveAdmin(
-      c.get('userId'),
-      deps.getUserById,
-      c.get('authSkipped'),
-      c.get('legacyTokenAuth'),
-    )
+    const isAdmin = await resolveAdmin(c.get('userId'), deps.getUserById, c.get('legacyTokenAuth'))
     if (!isAdmin) {
       return problem(
         c,
@@ -839,14 +824,7 @@ export function settingsRoutes(deps: AppDependencies) {
 
   router.post('/api/v1/settings/test-webhook', async (c) => {
     const userId = c.get('userId')
-    if (
-      !(await resolveAdmin(
-        userId,
-        deps.getUserById,
-        c.get('authSkipped'),
-        c.get('legacyTokenAuth'),
-      ))
-    ) {
+    if (!(await resolveAdmin(userId, deps.getUserById, c.get('legacyTokenAuth')))) {
       return problem(
         c,
         'admin-required',

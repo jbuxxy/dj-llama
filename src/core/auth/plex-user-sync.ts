@@ -5,7 +5,7 @@
 // screen) depends separately on hasMusicAccess. Run periodically (see
 // src/index.ts) and on demand via the admin's "Sync now" button.
 
-import { hashPassword } from '@/core/auth'
+import { unusablePasswordHash } from '@/core/auth'
 import { getPlexServerSharedUsers } from '@/core/auth/plex'
 import { errMsg } from '@/core/validation'
 import type { Database } from '@/db'
@@ -53,7 +53,7 @@ export async function syncPlexServerUsers(db: Database): Promise<PlexUserSyncRes
     if (!existing) {
       await createUser(db, {
         username: pu.username,
-        passwordHash: hashPassword(crypto.randomUUID()),
+        passwordHash: unusablePasswordHash(),
         isAdmin: false,
         email: pu.email ?? undefined,
         plexAccountId: pu.accountId,

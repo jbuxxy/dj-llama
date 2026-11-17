@@ -1,15 +1,11 @@
 import * as z from 'zod'
 import { stripControlChars } from '@/core/text/strip-control-chars'
+import { MBID_RE } from '@/core/validation'
 import { idParamSchema } from './validator'
 
 export const requestIdParamSchema = idParamSchema
 
-const mbidSchema = z
-  .string()
-  .regex(
-    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-    'must be a valid MusicBrainz ID',
-  )
+export const mbidSchema = z.string().regex(MBID_RE, 'must be a valid MusicBrainz ID')
 
 export const mbidParamSchema = z.object({ mbid: mbidSchema })
 

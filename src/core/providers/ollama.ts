@@ -4,7 +4,7 @@ import { buildRecommendationPrompt, parseRecommendationResponse } from './prompt
 import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
 import { RecommendationStreamParser } from './stream-parse'
-import { timeoutSecondsWithDefaultToMs } from './timeout'
+import { timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
 import type { AiUsage, RecommendationProvider } from './types'
 
 const DEFAULT_BASE_URL = 'http://localhost:11434'
@@ -39,9 +39,7 @@ export class OllamaProvider implements RecommendationProvider {
     this.lastUsage = null
     const prompt = buildRecommendationPrompt(profile)
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
+    return withTimeout(this.timeoutMs, 'Ollama recommendation request', async (signal) => {
       const response = await fetchWithRetry(
         `${this.baseUrl}/api/chat`,
         {
@@ -57,7 +55,7 @@ export class OllamaProvider implements RecommendationProvider {
             // default meant paying a cold model load (often 10s+) repeatedly.
             keep_alive: '30m',
           }),
-          signal: controller.signal,
+          signal: signal,
         },
         { providerLabel: 'ollama' },
       )
@@ -79,9 +77,7 @@ export class OllamaProvider implements RecommendationProvider {
       }
 
       return parseRecommendationResponse(content)
-    } finally {
-      clearTimeout(timer)
-    }
+    })
   }
 
   async streamRecommendations(
@@ -92,9 +88,7 @@ export class OllamaProvider implements RecommendationProvider {
     const prompt = buildRecommendationPrompt(profile)
     const parser = new RecommendationStreamParser(onRecommendation)
 
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
-    try {
+    return withTimeout(this.timeoutMs, 'Ollama recommendation request', async (signal) => {
       const response = await fetchWithRetry(
         `${this.baseUrl}/api/chat`,
         {
@@ -107,7 +101,7 @@ export class OllamaProvider implements RecommendationProvider {
             stream: true,
             keep_alive: '30m',
           }),
-          signal: controller.signal,
+          signal: signal,
         },
         { providerLabel: 'ollama' },
       )
@@ -138,9 +132,7 @@ export class OllamaProvider implements RecommendationProvider {
       }
       if (!content) throw new Error('Empty response from Ollama API')
       return parseRecommendationResponse(content)
-    } finally {
-      clearTimeout(timer)
-    }
+    })
   }
 
   async testConnection(): Promise<{ success: boolean; message: string }> {

@@ -55,7 +55,7 @@ const ALLOWED_PREF_KEYS = new Set([
 export function authRoutes(deps: AppDependencies) {
   const router = new Hono<HonoEnv>()
 
-  // DJ Llama fork: local password accounts don't exist here. Every account
+  // Local password accounts don't exist here. Every account
   // (including the first/admin) is created by signing in with Plex --
   // see routes/auth-plex.ts. Kept as a stub (rather than removing the route)
   // so a stray POST here fails loudly instead of 404ing in a confusing way.
@@ -63,8 +63,8 @@ export function authRoutes(deps: AppDependencies) {
     return c.json({ error: 'Local registration is disabled. Sign in with Plex instead.' }, 403)
   })
 
-  // DJ Llama fork: no local password login, same as /register above. Every
-  // account's passwordHash is an unguessable random UUID (see auth-plex.ts),
+  // No local password login, same as /register above. Every
+  // account's passwordHash is unusable (see unusablePasswordHash),
   // so this was already unusable in practice -- stubbed explicitly anyway
   // for the same "fail loudly, not confusingly" reason as /register.
   router.post('/api/v1/auth/login', async (c) => {
@@ -163,7 +163,7 @@ export function authRoutes(deps: AppDependencies) {
     return c.body(null, 204)
   })
 
-  // DJ Llama fork: no local passwords exist to change, same reasoning as
+  // No local passwords exist to change, same reasoning as
   // /register and /login above.
   router.post('/api/v1/auth/change-password', zJson(changePasswordSchema), async (c) => {
     return c.json({ error: 'Local login is disabled. Sign in with Plex instead.' }, 403)

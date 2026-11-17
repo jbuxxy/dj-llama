@@ -1115,13 +1115,16 @@ export function DiscoverPage() {
   // Shared by the desktop and mobile MoreMenu instances below.
   const handleRefreshArtistData = isAdmin
     ? () => {
-        toast.promise(rescanArtists(), {
+        // The artist_rescan job's completion already invalidates the list
+        // (use-realtime-updates); refetching here too covers a dropped stream.
+        const run = rescanArtists()
+        toast.promise(run, {
           loading: 'Refreshing artist data...',
           success: (r) =>
             `Rescan complete: ${r.updated}/${r.attempted} updated; ${r.failed} failed.`,
           error: 'Rescan failed',
         })
-        setTimeout(refetch, 3000)
+        run.then(() => refetch()).catch(() => undefined)
       }
     : undefined
 

@@ -34,17 +34,14 @@ export function requireSessionUser(c: Context<HonoEnv>): RequireUserResult {
   return auth
 }
 
-/** Caller is an admin. Honours authSkipped (fresh install) and rejects legacy tokens. */
+/** Caller is an admin. Rejects legacy tokens. */
 export async function requireAdmin(
   c: Context<HonoEnv>,
   getUserById: GetUserById,
 ): Promise<RequireUserResult> {
-  if (c.get('authSkipped')) {
-    return { ok: true, userId: c.get('userId') ?? 0 }
-  }
   const auth = requireUser(c)
   if (!auth.ok) return auth
-  const isAdmin = await resolveAdmin(auth.userId, getUserById, false, c.get('legacyTokenAuth'))
+  const isAdmin = await resolveAdmin(auth.userId, getUserById, c.get('legacyTokenAuth'))
   if (!isAdmin) {
     return { ok: false, response: adminRequired(c) }
   }

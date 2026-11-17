@@ -1,4 +1,5 @@
 import PQueue from 'p-queue'
+import { TtlCache } from '@/core/cache/ttl-cache'
 import type { LidarrAlbum, LidarrArtist } from '@/core/clients/lidarr'
 import type {
   HealthCheckId,
@@ -91,7 +92,7 @@ export class LibraryHealthService {
 
   async runChecks(): Promise<HealthCheckResult[]> {
     // A health scan means the user wants fresh numbers; drop memoized stats.
-    this.statsCache = null
+    this.statsCache.clear()
     const [lidarrArtists, cachedArtists] = await Promise.all([
       this.deps.lidarrClient.getArtists(),
       this.deps.artistCache.getAll(),
@@ -160,18 +161,10 @@ export class LibraryHealthService {
 
   // getStats pulls Lidarr's entire artist list (tens of MB / ~30s on a big
   // library) -- memoize briefly so revisiting Library Health is instant.
-  private statsCache: { at: number; value: Promise<LibraryStats> } | null = null
-  private static readonly STATS_TTL_MS = 5 * 60 * 1000
+  private readonly statsCache = new TtlCache<LibraryStats>(5 * 60 * 1000, 1)
 
-  async getStats(): Promise<LibraryStats> {
-    const hit = this.statsCache
-    if (hit && Date.now() - hit.at < LibraryHealthService.STATS_TTL_MS) return hit.value
-    const value = this.loadStats()
-    this.statsCache = { at: Date.now(), value }
-    value.catch(() => {
-      if (this.statsCache?.value === value) this.statsCache = null
-    })
-    return value
+  getStats(): Promise<LibraryStats> {
+    return this.statsCache.get('stats', () => this.loadStats())
   }
 
   private async loadStats(): Promise<LibraryStats> {

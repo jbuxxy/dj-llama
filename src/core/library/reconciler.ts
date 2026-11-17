@@ -1,4 +1,5 @@
 import type { createMusicBrainzClient } from '@/core/clients/musicbrainz'
+import { errMsg, isValidMbid } from '@/core/validation'
 import type { LibrarySyncCounts } from '@/db/schema'
 import { normalizeArtistName } from './normalize'
 import type { LibraryArtist } from './sources/types'
@@ -7,12 +8,6 @@ type MBClient = Pick<
   ReturnType<typeof createMusicBrainzClient>,
   'searchArtist' | 'getReleaseGroups'
 >
-
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-function mbErrorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
-}
 
 function bumpMbFailed(counts: LibrarySyncCounts): void {
   counts.mbApiCallsFailed = (counts.mbApiCallsFailed ?? 0) + 1
@@ -47,10 +42,6 @@ export type ReconcilerContext = {
   ) => Promise<Array<{ mbid: string; name: string; source: string }>>
   /** Mutable accumulator updated as the run progresses; surfaced to UI */
   counts: LibrarySyncCounts
-}
-
-function isValidUuid(value: string | undefined): value is string {
-  return typeof value === 'string' && UUID_RE.test(value)
 }
 
 function matchedRow(
@@ -118,7 +109,7 @@ export async function reconcileArtist(
   }
 
   // Step 1: source-provided MBID
-  if (isValidUuid(artist.mbid)) {
+  if (isValidMbid(artist.mbid)) {
     ctx.counts.matchedMbid += 1
     return matchedRow(artist, nameNormalized, artist.mbid, 'mbid', 1.0)
   }
@@ -147,7 +138,7 @@ export async function reconcileArtist(
   } catch (err) {
     bumpMbFailed(ctx.counts)
     console.warn(
-      `[library-reconcile] MB searchArtist failed for "${artist.name}"; leaving unreconciled: ${mbErrorMessage(err)}`,
+      `[library-reconcile] MB searchArtist failed for "${artist.name}"; leaving unreconciled: ${errMsg(err)}`,
     )
     ctx.counts.unreconciledNoCandidate += 1
     return unreconciledRow(artist, nameNormalized, 'no_candidate')
@@ -214,7 +205,7 @@ export async function reconcileArtist(
         } catch (err) {
           bumpMbFailed(ctx.counts)
           console.warn(
-            `[library-reconcile] MB getReleaseGroups failed for candidate ${c.id} of "${artist.name}"; treating as zero overlap: ${mbErrorMessage(err)}`,
+            `[library-reconcile] MB getReleaseGroups failed for candidate ${c.id} of "${artist.name}"; treating as zero overlap: ${errMsg(err)}`,
           )
           return { candidate: c, overlap: 0 }
         }

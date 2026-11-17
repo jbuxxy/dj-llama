@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { realtimeBroker } from '@/core/realtime/broker'
+import { errMsg } from '@/core/validation'
 
 /**
  * Live, per-user view of background work ("what is DJ Llama doing for me
@@ -224,7 +225,7 @@ export async function trackActivity<T>(
     job.done(summarize?.(result))
     return result
   } catch (err) {
-    job.fail(err instanceof Error ? err.message : String(err))
+    job.fail(errMsg(err))
     throw err
   }
 }

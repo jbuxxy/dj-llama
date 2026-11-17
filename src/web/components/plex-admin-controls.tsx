@@ -28,18 +28,15 @@ function ChangeLibrarySection({ onChanged }: { onChanged: () => void }) {
     queryKey: ['plex-library-sections'],
     queryFn: getPlexLibrarySections,
   })
-  const [selected, setSelected] = useState<Set<string> | null>(null)
+  // null until the user toggles something: until then the server's current
+  // sections are the selection.
+  const [edited, setSelected] = useState<Set<string> | null>(null)
   const [saving, setSaving] = useState(false)
-
-  useEffect(() => {
-    if (data && selected === null) {
-      setSelected(new Set(data.currentSectionIds))
-    }
-  }, [data, selected])
+  const selected = edited ?? (data ? new Set(data.currentSectionIds) : null)
 
   function toggle(id: string) {
     setSelected((current) => {
-      const next = new Set(current ?? [])
+      const next = new Set(current ?? selected ?? [])
       if (next.has(id)) next.delete(id)
       else next.add(id)
       return next

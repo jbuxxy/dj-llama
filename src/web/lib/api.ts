@@ -536,12 +536,6 @@ export const getGenreArtists = (slug: string, view: string, limit = 20) =>
 // Library warm status
 export const getWarmStatuses = (mbids: string) =>
   fetchApi<{ statuses: Record<string, string> }>(`/library/warm/status?mbids=${mbids}`)
-export const warmArtists = (mbids: string[]) =>
-  fetchApi('/library/warm', {
-    method: 'POST',
-    body: JSON.stringify({ mbids }),
-  })
-
 // Library sync
 // LibrarySyncCounts mirrors src/db/schema.ts - redeclared here to avoid pulling drizzle into the web bundle
 export type LibrarySyncCounts = {
@@ -993,34 +987,10 @@ export async function moodDiscoverStream(
   flush(pending + decoder.decode())
 }
 
-// OAuth
-export async function initiateOAuth(
-  provider: string,
-  data: Partial<{ clientId: string; clientSecret: string; redirectUri: string }> = {},
-): Promise<{ authUrl: string }> {
-  return fetchApi(`/auth/oauth/${provider}/initiate`, {
-    method: 'POST',
-    body: JSON.stringify(data),
-  })
-}
-
 // User preferences (per-user scoring weights, thresholds, etc.)
 export const getUserPreferences = () => fetchApi<Record<string, unknown>>('/auth/me/preferences')
 export const updateUserPreferences = (prefs: Record<string, unknown>) =>
   fetchApi('/auth/me/preferences', { method: 'PATCH', body: JSON.stringify(prefs) })
-
-export async function disconnectOAuth(provider: string): Promise<void> {
-  await fetchApi(`/auth/oauth/${provider}`, { method: 'DELETE' })
-}
-
-export async function getOAuthStatus(provider: string): Promise<{
-  connected: boolean
-  scopes: string | null
-  accountLabel: string | null
-  accountTier: string | null
-}> {
-  return fetchApi(`/auth/oauth/${provider}/status`)
-}
 
 export async function getPopularAlbumsAvailability(): Promise<{
   available: boolean

@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { useActivity } from '../lib/activity'
 import { getPipelineStatus } from '../lib/api'
+import { formatElapsedSeconds } from '../lib/format-time'
 
 type SSEProgress = {
   stage: string
@@ -46,13 +47,6 @@ const FIRST_SCAN_DESCRIPTIONS: Record<string, string> = {
 function stageIndex(stage: string): number {
   const idx = STAGES.indexOf(stage)
   return idx === -1 ? 0 : idx
-}
-
-function formatElapsed(seconds: number): string {
-  const m = Math.floor(seconds / 60)
-  const s = seconds % 60
-  if (m === 0) return `${s}s`
-  return `${m}m ${s.toString().padStart(2, '0')}s`
 }
 
 const STALL_THRESHOLD_MS = 30_000
@@ -208,7 +202,7 @@ export function PipelineProgress({
         </div>
         <div className="flex items-center gap-3 text-xs text-muted">
           {startedRef.current && stage !== 'complete' && (
-            <span>Running for {formatElapsed(elapsed)}</span>
+            <span>Running for {formatElapsedSeconds(elapsed)}</span>
           )}
           {current !== undefined && total !== undefined && (
             <span>

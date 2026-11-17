@@ -218,22 +218,6 @@ describe('validation: recommendations', () => {
 
 // Playlist routes need playlistDeps wired; covered by playlists.test.ts.
 
-describe('validation: oauth initiate', () => {
-  it('rejects non-http redirectUri', async () => {
-    const { app, headers } = await authedApp()
-    const res = await app.request('/api/v1/auth/oauth/spotify/initiate', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...headers },
-      body: JSON.stringify({
-        clientId: 'x',
-        clientSecret: 'y',
-        redirectUri: 'javascript:alert(1)',
-      }),
-    })
-    expect(res.status).toBe(400)
-  })
-})
-
 describe('validation: quick-discover', () => {
   it('rejects empty artistName', async () => {
     const { app, headers } = await authedApp()

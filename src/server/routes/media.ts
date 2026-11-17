@@ -33,13 +33,10 @@ export function mediaRoutes(deps: AppDependencies) {
     }
 
     try {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 10_000)
       const upstream = await fetch(url.href, {
         redirect: 'manual',
-        signal: controller.signal,
+        signal: AbortSignal.timeout(10_000),
       })
-      clearTimeout(timer)
       if (!upstream.ok) return c.json({ error: 'Upstream fetch failed' }, 502)
       const contentType = upstream.headers.get('content-type') ?? 'application/octet-stream'
       if (!contentType.startsWith('image/')) {

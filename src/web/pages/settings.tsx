@@ -2110,8 +2110,8 @@ function SettingsSkeleton() {
 export function SettingsPage() {
   const queryClient = useQueryClient()
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialTab = parseTab(searchParams.get('tab'))
-  const [tab, setTab] = useState<Tab>(initialTab ?? 'connections')
+  // The URL is the single source of truth for the open tab.
+  const tab: Tab = parseTab(searchParams.get('tab')) ?? 'connections'
   const { data: currentUser } = useQuery({ queryKey: ['currentUser'], queryFn: getCurrentUser })
   const isAdmin = currentUser?.isAdmin ?? false
   const navGroups = useSettingsNav(isAdmin)
@@ -2128,14 +2128,7 @@ export function SettingsPage() {
     queryClient.invalidateQueries({ queryKey: ['settings'] })
   }
 
-  useEffect(() => {
-    if (initialTab && initialTab !== tab) {
-      setTab(initialTab)
-    }
-  }, [initialTab, tab])
-
   function handleTabChange(nextTab: Tab) {
-    setTab(nextTab)
     const nextParams = new URLSearchParams(searchParams)
     nextParams.set('tab', nextTab)
     setSearchParams(nextParams, { replace: true })

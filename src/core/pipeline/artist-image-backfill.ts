@@ -1,6 +1,7 @@
 import PQueue from 'p-queue'
 import { isMaintenance } from '@/core/ops/maintenance'
 import { redactSecrets } from '@/core/providers/retry'
+import { errMsg } from '@/core/validation'
 import type { Database } from '@/db'
 import { getArtistsNeedingImageBackfill, upsertArtist } from '@/db/queries/artists'
 import type { SettingsRow } from '@/db/queries/settings'
@@ -104,9 +105,7 @@ export async function runArtistImageBackfill(
         }
       } catch (error) {
         result.failed++
-        console.warn(
-          `[artist-image-backfill] ${candidate.name}: ${redactSecrets(error instanceof Error ? error.message : String(error))}`,
-        )
+        console.warn(`[artist-image-backfill] ${candidate.name}: ${redactSecrets(errMsg(error))}`)
       }
     }
 

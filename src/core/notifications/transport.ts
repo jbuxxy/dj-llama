@@ -1,5 +1,6 @@
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
+import { errMsg } from '@/core/validation'
 import { redactUrlForLog } from '../clients/http'
 import {
   formatUrlHostname,
@@ -95,9 +96,7 @@ export async function post(
     }
     return { ok: true, status: res.status }
   } catch (err: unknown) {
-    console.error(
-      `POST to ${safeUrl} failed: ${redact(err instanceof Error ? err.message : String(err))}`,
-    )
+    console.error(`POST to ${safeUrl} failed: ${redact(errMsg(err))}`)
     return { ok: false, error: err instanceof Error ? err.message : 'request failed' }
   } finally {
     clearTimeout(timeout)
