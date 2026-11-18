@@ -11,6 +11,7 @@ export type StoredTrackFeatures = {
   keyName: string | null
   energy: number | null
   error: string | null
+  analyzedAt: Date
 }
 
 export async function getTrackFeatures(
@@ -27,6 +28,7 @@ export async function getTrackFeatures(
       keyName: trackFeatures.keyName,
       energy: trackFeatures.energy,
       error: trackFeatures.error,
+      analyzedAt: trackFeatures.analyzedAt,
     })
     .from(trackFeatures)
     .where(inArray(trackFeatures.ratingKey, ratingKeys))

@@ -135,3 +135,36 @@ describe('sequenceTracks', () => {
     expect(sequenceTracks(tracks, (x) => x.f)).toEqual(tracks)
   })
 })
+
+describe('analysis retry policy', async () => {
+  const { needsAnalysis } = await import('@/core/audio/analyzer')
+  const track = { ratingKey: '1', partKey: '/library/parts/1/a.mp3' }
+  const stored = (over: Partial<{ partKey: string; error: string | null; analyzedAt: Date }>) => ({
+    ratingKey: '1',
+    partKey: track.partKey,
+    bpm: null,
+    camelot: null,
+    keyName: null,
+    energy: null,
+    error: null,
+    analyzedAt: new Date(),
+    ...over,
+  })
+  it('analyzes new tracks and replaced files, not fresh results', () => {
+    expect(needsAnalysis(track, undefined)).toBe(true)
+    expect(needsAnalysis(track, stored({ partKey: '/library/parts/2/b.mp3' }))).toBe(true)
+    expect(needsAnalysis(track, stored({}))).toBe(false)
+  })
+  it('retries a failure only after a week', () => {
+    const now = Date.now()
+    expect(
+      needsAnalysis(track, stored({ error: 'x', analyzedAt: new Date(now - 60_000) }), now),
+    ).toBe(false)
+    expect(
+      needsAnalysis(track, stored({ error: 'x', analyzedAt: new Date(now - 8 * 86_400_000) }), now),
+    ).toBe(true)
+  })
+  it('asks ffmpeg to reconnect on network errors', () => {
+    expect(ffmpegArgs('http://127.0.0.1:1/x', 0)).toContain('-reconnect_on_network_error')
+  })
+})

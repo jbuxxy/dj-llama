@@ -16,26 +16,40 @@ import { analyzeSamples } from './features'
 export type AnalyzableTrack = { ratingKey: string; partKey: string; durationMs?: number | null }
 export type PlexConnection = { plexUrl: string; token: string }
 
-// Two ffmpeg processes at once: decoding is cheap, but this shares the box
-// with Plex and everything else.
-const queue = new PQueue({ concurrency: 2 })
+// One track at a time. Measured against a real Plex server: two overlapping
+// file reads already draw 503s and connection resets, one at a time is clean.
+const queue = new PQueue({ concurrency: 1 })
 const inFlight = new Map<string, Promise<void>>()
+
+// Plex drops connections when several reads overlap, which surfaces as an
+// ffmpeg I/O error or a truncated (too short) excerpt -- worth a retry.
+const ATTEMPTS = 3
+const RETRY_DELAYS_MS = [2_000, 6_000]
 
 async function analyzeOne(
   db: Database,
   track: AnalyzableTrack,
   plex: PlexConnection,
+  retryDelaysMs: number[] = RETRY_DELAYS_MS,
 ): Promise<void> {
-  try {
-    const samples = await decodeExcerpt({ ...plex, partKey: track.partKey }, track.durationMs)
-    const features = analyzeSamples(samples)
-    await saveTrackFeatures(db, { ...track, features })
-  } catch (err) {
-    await saveTrackFeatures(db, {
-      ...track,
-      error: (err instanceof Error ? err.message : String(err)).slice(0, 300),
-    })
+  let lastErr: unknown
+  for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+    try {
+      const samples = await decodeExcerpt({ ...plex, partKey: track.partKey }, track.durationMs)
+      const features = analyzeSamples(samples)
+      await saveTrackFeatures(db, { ...track, features })
+      return
+    } catch (err) {
+      lastErr = err
+      const delay = retryDelaysMs[attempt]
+      if (delay == null) break
+      await new Promise((r) => setTimeout(r, delay))
+    }
   }
+  await saveTrackFeatures(db, {
+    ...track,
+    error: (lastErr instanceof Error ? lastErr.message : String(lastErr)).slice(0, 300),
+  })
 }
 
 function schedule(db: Database, track: AnalyzableTrack, plex: PlexConnection, priority: number) {
@@ -49,10 +63,16 @@ function schedule(db: Database, track: AnalyzableTrack, plex: PlexConnection, pr
   return p
 }
 
-function needsAnalysis(track: AnalyzableTrack, stored: StoredTrackFeatures | undefined): boolean {
-  // Re-analyze when Plex points at a different file; failures aren't retried
-  // until the file changes.
-  return !stored || stored.partKey !== track.partKey
+// A failed track is retried after this long (or as soon as its file changes).
+const ERROR_RETRY_MS = 7 * 24 * 60 * 60 * 1000
+
+export function needsAnalysis(
+  track: AnalyzableTrack,
+  stored: StoredTrackFeatures | undefined,
+  now = Date.now(),
+): boolean {
+  if (!stored || stored.partKey !== track.partKey) return true
+  return stored.error != null && now - stored.analyzedAt.getTime() > ERROR_RETRY_MS
 }
 
 /**

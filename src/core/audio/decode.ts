@@ -9,6 +9,8 @@
 import { spawn } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { createServer } from 'node:http'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { SAMPLE_RATE } from './features'
 
 export type PlexAudioSource = { plexUrl: string; token: string; partKey: string }
@@ -20,6 +22,26 @@ const TICKET_TTL_MS = 2 * 60_000
 type Ticket = { url: string; token: string; expires: number }
 const tickets = new Map<string, Ticket>()
 let server: Promise<number> | null = null
+
+// Plex resets connections under overlapping reads, and a pooled keep-alive
+// socket it already closed fails the same way. Fresh connection per request,
+// a few quick retries on network errors (HTTP errors pass through as-is).
+async function fetchUpstream(
+  url: string,
+  method: string,
+  headers: Record<string, string>,
+): Promise<Response> {
+  let lastErr: unknown
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      return await fetch(url, { method, headers, keepalive: false })
+    } catch (err) {
+      lastErr = err
+      await new Promise((r) => setTimeout(r, 250 * 2 ** attempt))
+    }
+  }
+  throw lastErr
+}
 
 /** Starts the loopback proxy once; resolves to its port. */
 function proxyPort(): Promise<number> {
@@ -33,9 +55,13 @@ function proxyPort(): Promise<number> {
         return
       }
       try {
-        const headers: Record<string, string> = { 'X-Plex-Token': ticket.token }
+        const headers: Record<string, string> = {
+          'X-Plex-Token': ticket.token,
+          'X-Plex-Client-Identifier': 'djllama-audio-analysis',
+          'X-Plex-Product': 'DJ Llama',
+        }
         if (typeof req.headers.range === 'string') headers.Range = req.headers.range
-        const upstream = await fetch(ticket.url, { method: req.method, headers })
+        const upstream = await fetchUpstream(ticket.url, req.method ?? 'GET', headers)
         const out: Record<string, string> = {}
         for (const h of ['content-type', 'content-length', 'content-range', 'accept-ranges']) {
           const v = upstream.headers.get(h)
@@ -46,17 +72,13 @@ function proxyPort(): Promise<number> {
           res.end()
           return
         }
-        const reader = upstream.body.getReader()
-        res.on('close', () => void reader.cancel().catch(() => {}))
-        for (;;) {
-          const { done, value } = await reader.read()
-          if (done) break
-          if (!res.write(value)) await new Promise((r) => res.once('drain', r))
-        }
-        res.end()
+        // pipeline() ends `res` when the body ends and tears both down if
+        // either side fails. (A hand-rolled read loop that cancelled on
+        // res 'close' cut transfers off at 0 bytes under Bun's node:http.)
+        await pipeline(Readable.fromWeb(upstream.body as never), res)
       } catch {
         if (!res.headersSent) res.writeHead(502)
-        res.end()
+        if (!res.writableEnded) res.end()
       }
     })
     srv.on('error', (err) => {
@@ -85,6 +107,14 @@ export function ffmpegArgs(inputUrl: string, startSeconds: number): string[] {
     String(Math.max(0, Math.floor(startSeconds))),
     '-t',
     String(EXCERPT_SECONDS),
+    // Plex resets connections under load (each seek is a new range request);
+    // reconnect instead of failing the excerpt.
+    '-reconnect',
+    '1',
+    '-reconnect_on_network_error',
+    '1',
+    '-reconnect_delay_max',
+    '4',
     '-i',
     inputUrl,
     '-vn',
