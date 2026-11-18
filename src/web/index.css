@@ -34,6 +34,12 @@
   --color-svc-musicbrainz: #d4a574;
   --color-svc-ai: #9b7ab8;
   --color-svc-webhook: #60a5fa;
+
+  /* Chart categorical slots (taste map). Validated with the dataviz palette
+     checker against each theme's surface, all pairs (scatter). */
+  --color-viz-1: #3987e5;
+  --color-viz-2: #d95926;
+  --color-viz-3: #199e70;
 }
 
 /* DJ Llama - Dark (project signature; near-black slate + headphone green accent) */
@@ -49,6 +55,9 @@
   --color-warning: #d4b06a;
   --color-text: #e6f2ea;
   --color-muted: #8fa79a;
+  --color-viz-1: #3987e5;
+  --color-viz-2: #d95926;
+  --color-viz-3: #199e70;
 }
 
 /* DJ Llama - Light */
@@ -64,6 +73,9 @@
   --color-warning: #a8702d;
   --color-text: #12241a;
   --color-muted: #5c7268;
+  --color-viz-1: #2a78d6;
+  --color-viz-2: #eb6834;
+  --color-viz-3: #1baf7a;
 }
 
 /* Self-hosted (no external font CDN) -- OFL licensed, see /fonts/OFL.txt */

@@ -15,6 +15,7 @@ export const WEIGHT_KEYS = [
   'aiConfidence',
   'feedbackBoost',
   'popularity',
+  'semantic',
 ] as const satisfies ReadonlyArray<keyof ScoringWeights>
 
 export type TrainingSample = {

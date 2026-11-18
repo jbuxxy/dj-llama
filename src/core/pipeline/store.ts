@@ -62,6 +62,12 @@ export interface StoreDb {
   getPopularityMap?: () => Promise<Map<string, number>>
   // Weights fitted to the user's listening outcomes (users.learned_weights),
   // applied when preferences.autoTuneWeights is on. Optional for mocks.
+  // Embedding similarity of each candidate (by MBID) to the user's library,
+  // 0..1 (core/embeddings/service.ts). Optional: absent or failing = neutral.
+  getSemanticScores?: (
+    userId: number,
+    candidates: Array<{ mbid: string; name: string; genres?: string[] }>,
+  ) => Promise<Map<string, number>>
   getLearnedWeights?: (
     userId: number,
   ) => Promise<{ weights: Preferences['scoringWeights']; samples: number } | null>

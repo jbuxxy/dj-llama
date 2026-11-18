@@ -49,6 +49,7 @@ import { requestRoutes } from './routes/requests'
 import { settingsRoutes } from './routes/settings'
 import { setupRoutes } from './routes/setup'
 import { targetRoutes } from './routes/targets'
+import { tasteMapRoutes } from './routes/taste-map'
 import { testSeedRoutes } from './routes/test-seed'
 import { userRoutes } from './routes/users'
 import { webhookRoutes } from './routes/webhooks'
@@ -347,6 +348,7 @@ export function createApp(deps: AppDependencies) {
   app.route('/', userRoutes(deps))
   app.route('/', targetRoutes(deps))
   app.route('/', dashboardRoutes(deps))
+  app.route('/', tasteMapRoutes(deps))
   app.route(
     '/',
     artistBlocksRoutes({
@@ -384,6 +386,10 @@ export function createApp(deps: AppDependencies) {
       db: deps.db,
       getSettings: deps.getSettings,
       providerRegistry: deps.providerRegistry,
+      libraryMatches: deps.embeddings
+        ? (userId, query) =>
+            deps.embeddings?.libraryMatchesForQuery(userId, query) ?? Promise.resolve([])
+        : undefined,
     }),
   )
   app.route(

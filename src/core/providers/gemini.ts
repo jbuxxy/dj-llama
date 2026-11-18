@@ -14,6 +14,10 @@ import type { AiUsage, RecommendationProvider } from './types'
 const DEFAULT_MODEL = 'gemini-3-flash-preview'
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
 const DEFAULT_TIMEOUT_SECONDS = 60
+const EMBEDDING_MODEL = 'gemini-embedding-001'
+const EMBEDDING_DIMENSIONS = 256
+// batchEmbedContents accepts up to 100 requests per call.
+const EMBED_BATCH = 100
 
 // Gemini's responseSchema is a subset of JSON Schema and rejects fields like
 // `$schema`, `additionalProperties`, `exclusiveMinimum`, etc. Strip the ones
@@ -98,6 +102,55 @@ export class GeminiProvider implements RecommendationProvider {
       inputTokens: usage.promptTokenCount,
       outputTokens: usage.candidatesTokenCount,
     }
+  }
+
+  /**
+   * Artist-similarity embeddings via gemini-embedding-001, truncated to
+   * EMBEDDING_DIMENSIONS (Matryoshka -- the leading dimensions carry the most
+   * signal). The API returns no token count; usage is estimated at ~4 chars
+   * per token so the cost dashboard still sees it.
+   */
+  async embed(texts: string[]): Promise<number[][]> {
+    this.lastUsage = null
+    const out: number[][] = []
+    for (let i = 0; i < texts.length; i += EMBED_BATCH) {
+      const chunk = texts.slice(i, i + EMBED_BATCH)
+      const vectors = await withTimeout(
+        this.timeoutMs,
+        'Gemini embedding request',
+        async (signal) => {
+          const res = await fetchWithRetry(
+            `${API_BASE}/${EMBEDDING_MODEL}:batchEmbedContents`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+              body: JSON.stringify({
+                requests: chunk.map((text) => ({
+                  model: `models/${EMBEDDING_MODEL}`,
+                  content: { parts: [{ text }] },
+                  taskType: 'SEMANTIC_SIMILARITY',
+                  outputDimensionality: EMBEDDING_DIMENSIONS,
+                })),
+              }),
+              signal,
+            },
+            { providerLabel: 'gemini' },
+          )
+          const data = (await res.json()) as { embeddings?: Array<{ values?: number[] }> }
+          return (data.embeddings ?? []).map((e) => e.values ?? [])
+        },
+      )
+      if (vectors.length !== chunk.length)
+        throw new Error('Gemini returned the wrong number of embeddings')
+      out.push(...vectors)
+    }
+    this.lastUsage = {
+      provider: 'gemini',
+      model: EMBEDDING_MODEL,
+      inputTokens: Math.ceil(texts.reduce((n, t) => n + t.length, 0) / 4),
+      outputTokens: 0,
+    }
+    return out
   }
 
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {

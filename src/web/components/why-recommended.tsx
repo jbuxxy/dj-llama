@@ -2,6 +2,7 @@ import { Sparkles, X } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { useClickOutside } from '../hooks/use-click-outside'
 import { cn } from '../lib/utils'
+import { SimilarArtists } from './similar-artists'
 
 export const SOURCE_COLORS: Record<string, { label: string; color: string }> = {
   musicbrainz: { label: 'MB', color: 'var(--color-svc-musicbrainz)' },
@@ -27,6 +28,7 @@ const ANALYTICS_SOURCE_KEYS: Partial<Record<string, string>> = {
   consensus: 'Consensus',
   genreOverlap: 'Genre Overlap',
   popularity: 'Popularity',
+  semantic: 'Sounds Like Your Library',
 }
 
 export function formatSourceLabel(sourceKey: string): string {
@@ -50,10 +52,12 @@ export function formatSourceLabel(sourceKey: string): string {
 function WhyRecommendedDialog({
   reasoning,
   sources,
+  artist,
   onClose,
 }: {
   reasoning?: string | null
   sources?: Record<string, number> | null
+  artist?: { mbid?: string | null; name: string }
   onClose: () => void
 }) {
   const ref = useRef<HTMLDivElement>(null)
@@ -126,6 +130,12 @@ function WhyRecommendedDialog({
               </div>
             </div>
           )}
+
+          {artist && (
+            <div className="mt-3 pt-3 border-t border-border empty:hidden">
+              <SimilarArtists mbid={artist.mbid} name={artist.name} limit={6} />
+            </div>
+          )}
         </div>
       </div>
     </>
@@ -141,10 +151,13 @@ function WhyRecommendedDialog({
 export function WhyRecommendedButton({
   reasoning,
   sources,
+  artist,
   variant = 'subtle',
 }: {
   reasoning?: string | null
   sources?: Record<string, number> | null
+  /** When given, the dialog also shows similar artists (embedding lookup). */
+  artist?: { mbid?: string | null; name: string }
   variant?: 'subtle' | 'hero'
 }) {
   const [open, setOpen] = useState(false)
@@ -172,6 +185,7 @@ export function WhyRecommendedButton({
         <WhyRecommendedDialog
           reasoning={reasoning}
           sources={sources}
+          artist={artist}
           onClose={() => setOpen(false)}
         />
       )}

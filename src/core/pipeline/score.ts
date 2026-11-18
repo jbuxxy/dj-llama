@@ -32,6 +32,7 @@ export function computeWeightedScore(
     aiConfidence: number
     feedbackBoost: number
     popularity: number
+    semantic?: number
   },
 ): number {
   const raw =
@@ -40,7 +41,8 @@ export function computeWeightedScore(
     weights.genreOverlap * components.genreOverlap +
     weights.aiConfidence * components.aiConfidence +
     weights.feedbackBoost * components.feedbackBoost +
-    (weights.popularity ?? 0) * components.popularity
+    (weights.popularity ?? 0) * components.popularity +
+    (weights.semantic ?? 0) * (components.semantic ?? 0)
   return Math.max(0, Math.min(1, raw))
 }
 
@@ -96,6 +98,8 @@ export function score(
   feedbackHistory: Map<string, GenreFeedback>,
   popularityMap?: Map<string, number>,
   now: Date = new Date(),
+  /** Embedding similarity to the user's library by candidate MBID (0..1); missing = neutral 0.5. */
+  semanticMap?: Map<string, number>,
 ): ScoredArtist[] {
   const libraryGenreSet = new Set(libraryGenres.map((g) => g.toLowerCase()))
 
@@ -141,6 +145,7 @@ export function score(
 
     // Popularity: normalized 0-1 from artist_metadata, 0 if not found
     const popularity = popularityMap?.get(artist.name.trim().toLowerCase()) ?? 0
+    const semantic = (artist.mbid ? semanticMap?.get(artist.mbid) : undefined) ?? 0.5
 
     const baseScore = computeWeightedScore(weights, {
       consensus,
@@ -149,6 +154,7 @@ export function score(
       aiConfidence,
       feedbackBoost,
       popularity,
+      semantic,
     })
 
     const sourceScores: Record<string, number> = {
@@ -158,6 +164,7 @@ export function score(
       aiConfidence,
       feedbackBoost,
       popularity,
+      ...(semanticMap ? { semantic } : {}),
     }
 
     // Album-kind candidates get a bounded nudge from the recency and popularity

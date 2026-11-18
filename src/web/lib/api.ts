@@ -918,6 +918,7 @@ export type MoodStreamEvent =
   | { type: 'cover'; artistName: string; coverUrl: string }
   | { type: 'done'; count: number }
   | { type: 'error'; error: string }
+  | { type: 'library'; artists: Array<{ name: string; mbid: string | null; score: number }> }
 
 export const moodDiscover = (query: string) =>
   fetchApi<{ results: MoodResult[] }>('/mood/discover', {
@@ -1449,3 +1450,34 @@ export type AiUsageReport = {
   month: { since: string; spentUsd: number; budgetUsd: number | null }
 }
 export const getAiUsage = (days = 30) => fetchApi<AiUsageReport>(`/analytics/ai-usage?days=${days}`)
+
+export type SimilarArtist = {
+  name: string
+  mbid: string | null
+  score: number
+  owned: boolean
+  artistId: number | null
+  imageUrl: string | null
+}
+export const getSimilarArtists = (target: { mbid?: string | null; name: string }, limit = 8) => {
+  const params = new URLSearchParams({ name: target.name, limit: String(limit) })
+  if (target.mbid) params.set('mbid', target.mbid)
+  return fetchApi<{ available: boolean; artists: SimilarArtist[] }>(`/similar-artists?${params}`)
+}
+
+export type TasteMapPoint = {
+  key: string
+  name: string
+  mbid: string | null
+  x: number
+  y: number
+  kind: 'owned' | 'recommended' | 'keeper'
+  genre: string | null
+}
+export type TasteMapResponse = {
+  available: boolean
+  map: { points: TasteMapPoint[]; genres: string[]; computedAt: string } | null
+}
+export const getTasteMap = () => fetchApi<TasteMapResponse>('/taste-map')
+export const refreshTasteMap = () =>
+  fetchApi<{ started: boolean; running: boolean }>('/taste-map/refresh', { method: 'POST' })

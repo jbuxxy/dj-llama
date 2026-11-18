@@ -668,6 +668,23 @@ export const listeningEvents = pgTable(
   }),
 )
 
+// One vector per artist for semantic similarity ("more like this", the taste
+// map, the semantic score signal) -- see core/embeddings/. Keyed by MBID when
+// known ("mbid:<uuid>"), else by normalized name ("name:<normalized>"), so
+// library artists without a MusicBrainz match still get a point. Vectors are
+// unit-length; text_hash skips re-embedding unchanged artists. No pgvector:
+// at a few thousand rows an in-memory scan is faster than the round trip,
+// and it works on PGlite too.
+export const artistEmbeddings = pgTable('artist_embeddings', {
+  key: text('key').primaryKey(),
+  name: text('name').notNull(),
+  mbid: uuid('mbid'),
+  model: text('model').notNull(),
+  vector: real('vector').array().notNull(),
+  textHash: text('text_hash').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
 // One row per AI call (see core/providers/metered.ts): what it was for, the
 // tokens it used, and the estimated cost at record time (core/providers/
 // pricing.ts). Feeds the AI usage dashboard and the monthly budget check.
@@ -780,6 +797,8 @@ export type Preferences = {
     aiConfidence: number
     feedbackBoost: number
     popularity: number
+    /** Embedding similarity to the user's library (core/embeddings). Absent = 0. */
+    semantic?: number
   }
   rejectionCooldownDays: number
   topArtistsLimit: number

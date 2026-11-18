@@ -7,6 +7,7 @@ import { errMsg } from '@/core/validation'
 import { queryKeys } from '@/web/lib/query-keys'
 import { ConfirmDialog } from '../components/confirm-dialog'
 import { LibraryAlbumCoverageBadge } from '../components/library-album-coverage-badge'
+import { SimilarArtists } from '../components/similar-artists'
 import { Button } from '../components/ui/button'
 import {
   createRequest,
@@ -131,6 +132,10 @@ export function ArtistDiscographyPage() {
             Add discography
           </Button>
         </div>
+      )}
+
+      {artistQuery.data && mbid && (
+        <SimilarArtists mbid={mbid} name={artistQuery.data.artistName} limit={10} />
       )}
 
       {albumsQuery.isLoading && (

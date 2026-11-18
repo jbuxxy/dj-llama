@@ -48,7 +48,12 @@ function StackCard({
         />
         <div className="absolute inset-0 bg-gradient-to-t from-surface/90 via-surface/20 to-transparent" />
         <div className="absolute top-3 right-3">
-          <WhyRecommendedButton reasoning={rec.aiReasoning} sources={rec.sources} variant="hero" />
+          <WhyRecommendedButton
+            reasoning={rec.aiReasoning}
+            sources={rec.sources}
+            artist={{ mbid: rec.artist.mbid, name: rec.artist.name }}
+            variant="hero"
+          />
         </div>
       </div>
 

@@ -19,6 +19,11 @@ export type MoodDeps = {
   db: Database
   getSettings: () => Promise<Record<string, unknown> | null>
   providerRegistry: AiProviderRegistry
+  /** Library artists nearest the mood by embedding, shown while the AI works. Optional. */
+  libraryMatches?: (
+    userId: number,
+    query: string,
+  ) => Promise<Array<{ name: string; mbid: string | null; score: number }>>
 }
 
 type EnrichedResult = AiRecommendation & { coverUrl?: string; alreadyOwned: boolean }
@@ -29,6 +34,7 @@ export type MoodStreamEvent =
   | { type: 'cover'; artistName: string; coverUrl: string }
   | { type: 'done'; count: number }
   | { type: 'error'; error: string }
+  | { type: 'library'; artists: Array<{ name: string; mbid: string | null; score: number }> }
 
 type Enricher = {
   owned: (rec: AiRecommendation) => Promise<boolean>
@@ -212,6 +218,19 @@ export function moodRoutes(deps: MoodDeps) {
           }
           const pending: Promise<void>[] = []
           let count = 0
+          // Runs alongside the AI call: an embedding lookup is ~100ms, the
+          // AI takes seconds, so these usually land first.
+          const userId = c.get('userId')
+          if (deps.libraryMatches && userId != null) {
+            pending.push(
+              deps
+                .libraryMatches(userId, trimmedQuery)
+                .then((artists) => {
+                  if (artists.length > 0) send({ type: 'library', artists })
+                })
+                .catch((err) => console.warn('[mood] library matches failed:', errMsg(err))),
+            )
+          }
           try {
             await streamWithFallback(provider, profile, (rec) => {
               count++

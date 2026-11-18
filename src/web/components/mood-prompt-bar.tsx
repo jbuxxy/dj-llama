@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { toast } from 'sonner'
 import { watchJob } from '../lib/activity'
 import { getCurrentUser, getSettings, moodDiscoverStream, quickDiscover } from '../lib/api'
@@ -80,6 +81,10 @@ export function MoodPromptBar({
     coverUrl?: string
     alreadyOwned: boolean
   }> | null>(null)
+  const [libraryMatches, setLibraryMatches] = useState<Array<{
+    name: string
+    mbid: string | null
+  }> | null>(null)
   const [loading, setLoading] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
   useEffect(() => () => abortRef.current?.abort(), [])
@@ -91,6 +96,7 @@ export function MoodPromptBar({
     if (!query.trim() || loading) return
     setLoading(true)
     setResults([])
+    setLibraryMatches(null)
     abortRef.current?.abort()
     const controller = new AbortController()
     abortRef.current = controller
@@ -109,6 +115,8 @@ export function MoodPromptBar({
                 r.artistName === event.artistName ? { ...r, coverUrl: event.coverUrl } : r,
               ),
             )
+          } else if (event.type === 'library') {
+            setLibraryMatches(event.artists)
           } else if (event.type === 'error') {
             streamError = event.error
           }
@@ -182,6 +190,29 @@ export function MoodPromptBar({
           {loading ? 'Discovering...' : 'Discover'}
         </button>
       </form>
+      {libraryMatches && libraryMatches.length > 0 && (
+        <div className="mt-3">
+          <p className="text-xs font-medium text-muted mb-1.5">Already in your library</p>
+          <ul className="flex flex-wrap gap-1.5">
+            {libraryMatches.map((a) => (
+              <li key={a.mbid ?? a.name}>
+                {a.mbid ? (
+                  <Link
+                    to={`/requests/artist/${a.mbid}`}
+                    className="inline-block px-2 py-1 rounded-full border border-border text-xs text-text hover:border-accent hover:text-accent transition-colors"
+                  >
+                    {a.name}
+                  </Link>
+                ) : (
+                  <span className="inline-block px-2 py-1 rounded-full border border-border text-xs text-text">
+                    {a.name}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       {loading && (results?.length ?? 0) === 0 && <MoodSearchProgress />}
       {!loading && results && results.length === 0 && (
         <p className="mt-3 text-sm text-muted">
@@ -202,7 +233,10 @@ export function MoodPromptBar({
             </h3>
             <button
               type="button"
-              onClick={() => setResults(null)}
+              onClick={() => {
+                setResults(null)
+                setLibraryMatches(null)
+              }}
               className="text-xs text-muted hover:text-text"
             >
               Clear

@@ -188,7 +188,12 @@ export function TodaysPick({
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent md:bg-gradient-to-r md:from-transparent md:via-black/20 md:to-black/60" />
 
         <div className="absolute top-3 right-3">
-          <WhyRecommendedButton reasoning={rec.aiReasoning} sources={rec.sources} variant="hero" />
+          <WhyRecommendedButton
+            reasoning={rec.aiReasoning}
+            sources={rec.sources}
+            artist={{ mbid: rec.artist.mbid, name: rec.artist.name }}
+            variant="hero"
+          />
         </div>
 
         <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between gap-3">

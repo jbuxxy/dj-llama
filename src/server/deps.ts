@@ -35,6 +35,8 @@ import type { PlaylistDeps } from './routes/playlists'
 export interface DbDeps {
   db: import('@/db').Database
   storeDb: import('@/core/pipeline/store').StoreDb
+  /** Artist embeddings (similar artists, taste map); absent in tests that don't need it. */
+  embeddings?: ReturnType<typeof import('@/core/embeddings/service').createEmbeddingService>
 }
 
 // ---- Settings / setup ----

@@ -589,12 +589,26 @@ export class PipelineOrchestrator extends EventEmitter {
         libraryGenres.length > 0 ? libraryGenres : tasteProfile.topGenres.map((g) => g.name)
       const learned =
         deps.userId != null ? ((await db.getLearnedWeights?.(deps.userId)) ?? null) : null
+      const semanticMap =
+        deps.userId != null && db.getSemanticScores
+          ? await db
+              .getSemanticScores(
+                deps.userId,
+                resolved.map((a) => ({ mbid: a.mbid, name: a.name, genres: a.genres })),
+              )
+              .catch((err) => {
+                console.warn('[orchestrator] semantic scores unavailable:', errMsg(err))
+                return undefined
+              })
+          : undefined
       const scored = score(
         resolved,
         referenceGenres,
         effectiveWeights(prefs, learned),
         feedbackHistory,
         popularityMap,
+        undefined,
+        semanticMap,
       )
 
       this.emit('progress', {

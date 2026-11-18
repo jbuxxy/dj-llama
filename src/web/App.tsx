@@ -6,6 +6,7 @@ import {
   ListMusic,
   Lock,
   LogOut,
+  Map as MapIcon,
   Mic,
   Monitor,
   Moon,
@@ -59,6 +60,7 @@ import { SetupWizard } from './pages/setup'
 // waiting on a chunk download.
 const routeChunks = {
   artist: () => import('./pages/artist-discography'),
+  tasteMap: () => import('./pages/taste-map'),
   album: () => import('./pages/album-details'),
   discover: () => import('./pages/discover'),
   playlistDetail: () => import('./pages/playlist-detail'),
@@ -73,6 +75,7 @@ const ArtistDiscographyPage = lazy(() =>
 const AlbumDetailsPage = lazy(() =>
   routeChunks.album().then((m) => ({ default: m.AlbumDetailsPage })),
 )
+const TasteMapPage = lazy(() => routeChunks.tasteMap().then((m) => ({ default: m.TasteMapPage })))
 const DiscoverPage = lazy(() => routeChunks.discover().then((m) => ({ default: m.DiscoverPage })))
 const PlaylistDetailPage = lazy(() =>
   routeChunks.playlistDetail().then((m) => ({ default: m.PlaylistDetailPage })),
@@ -217,6 +220,14 @@ function UserMenu({
             </p>
           </div>
           <ThemeSection mode={mode} onModeChange={onModeChange} />
+          <NavLink
+            to="/taste-map"
+            onClick={() => setOpen(false)}
+            className="w-full flex items-center gap-2 px-3 py-2 text-sm text-muted hover:text-text hover:bg-bg transition-colors"
+          >
+            <MapIcon size={14} />
+            Taste Map
+          </NavLink>
           <NavLink
             to="/settings"
             onClick={() => setOpen(false)}
@@ -378,6 +389,12 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
                   <span className="flex items-center gap-1">
                     <ListMusic size={14} aria-hidden="true" />
                     Playlists
+                  </span>
+                </NavLink>
+                <NavLink to="/taste-map" className={navLinkClass}>
+                  <span className="flex items-center gap-1">
+                    <MapIcon size={14} aria-hidden="true" />
+                    Taste Map
                   </span>
                 </NavLink>
               </div>
@@ -544,6 +561,7 @@ function InnerApp() {
                     </AiRequiredRoute>
                   }
                 />
+                <Route path="/taste-map" element={<TasteMapPage />} />
                 <Route path="/playlists" element={<PlaylistsPage />} />
                 <Route path="/playlists/:id" element={<PlaylistDetailPage />} />
                 <Route path="/subscriptions" element={<Navigate to="/playlists" replace />} />

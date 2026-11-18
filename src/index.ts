@@ -21,6 +21,8 @@ import {
 } from './core/clients/spotify'
 import { getPlaylistTracks as getYoutubeMusicPlaylistTracks } from './core/clients/youtube-music'
 import { decryptChannelSecrets, initEncryption, isEncryptionEnabled } from './core/crypto'
+import { embeddingModelFor } from './core/embeddings'
+import { createEmbeddingService } from './core/embeddings/service'
 import { GenreService } from './core/genre/service'
 import { activityTracker, trackActivity } from './core/jobs/activity'
 import { startDigestNotifier } from './core/jobs/digest-notifier'
@@ -260,6 +262,43 @@ const librarySyncIntervalHours = bootSettings?.librarySyncIntervalHours ?? 6
 
 const librarySyncStore = createLibrarySyncStore(db)
 
+// Artist embeddings run on the configured AI provider when it can embed
+// (Gemini, OpenAI, Ollama); otherwise every embedding feature stays off.
+const embeddings = createEmbeddingService({
+  db,
+  getProvider: async () => {
+    const settings = await getSettings(db)
+    const model = embeddingModelFor(settings?.aiProvider)
+    if (!settings?.aiProvider || !settings.aiModel || !model) return null
+    try {
+      const provider = await providerRegistry.create(
+        settings.aiProvider,
+        {
+          apiKey: settings.aiApiKey ?? null,
+          model: settings.aiModel,
+          baseUrl: settings.aiBaseUrl ?? null,
+          timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+        },
+        { feature: 'embedding' },
+      )
+      return provider.embed ? { provider, model } : null
+    } catch (err) {
+      if (err instanceof AiBudgetExceededError) return null
+      throw err
+    }
+  },
+})
+
+async function runEmbeddingBackfill(): Promise<void> {
+  try {
+    const { embedded, pending, model } = await embeddings.backfill()
+    if (embedded > 0)
+      console.log(`[embeddings] embedded ${embedded} artist(s) with ${model}; ${pending} pending`)
+  } catch (err) {
+    console.warn('[embeddings] backfill failed:', errMsg(err))
+  }
+}
+
 const storeDb: StoreDb = {
   getExistingAlbumReleaseGroupMbids: (userId) => getExistingAlbumReleaseGroupMbids(db, userId),
   getBlockedAlbumKeys: (userId) => getBlockedAlbumKeys(db, userId),
@@ -314,6 +353,7 @@ const storeDb: StoreDb = {
   lookupArtistMetadata: (name) => lookupByName(db, name),
   getPopularityMap: () => getPopularityMap(db),
   getLearnedWeights: (userId) => getLearnedWeights(db, userId),
+  getSemanticScores: (userId, candidates) => embeddings.semanticScores(userId, candidates),
   getLibraryArtistsForUser: async (userId, options) => {
     const conds = [or(eq(libraryArtists.userId, userId), isNull(libraryArtists.userId))]
     if (options?.onlyReconciled) conds.push(isNotNull(libraryArtists.mbid))
@@ -2402,6 +2442,7 @@ let libraryHealthCron: Cron | null = null
 let stuckDetectorCron: Cron | null = null
 let jobRetentionCron: Cron | null = null
 let listeningBackfillCron: Cron | null = null
+let embeddingBackfillCron: Cron | null = null
 
 // Nightly, after the history backfill: label recommendations that stuck (or
 // didn't) and refit each user's learned scoring weights.
@@ -2685,6 +2726,7 @@ async function computeTasteProfile(
 const appDeps: AppDependencies = {
   db,
   storeDb,
+  embeddings,
   orchestrator,
   scheduler,
   providerRegistry,
@@ -2891,6 +2933,12 @@ const server = serve({ fetch: app.fetch, port })
 
     stuckDetectorCron = startStuckDetector(jobRecorder)
     jobRetentionCron = startJobRetention(db)
+    embeddingBackfillCron = new Cron('57 4 * * *', async () => {
+      if (!isMaintenance()) await runEmbeddingBackfill()
+    })
+    setTimeout(() => {
+      if (!isMaintenance()) void runEmbeddingBackfill()
+    }, 180_000)
     listeningBackfillCron = new Cron('37 4 * * *', async () => {
       if (isMaintenance()) return
       await backfillListeningHistory()
@@ -2953,6 +3001,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     stuckDetectorCron?.stop()
     jobRetentionCron?.stop()
     listeningBackfillCron?.stop()
+    embeddingBackfillCron?.stop()
     digestNotifierCron?.stop()
     librarySyncCron?.stop()
     libraryHealthCron?.stop()

@@ -23,6 +23,8 @@ type OllamaTagsResponse = {
   models: Array<{ name: string }>
 }
 
+const OLLAMA_EMBEDDING_MODEL = 'nomic-embed-text'
+
 export class OllamaProvider implements RecommendationProvider {
   private model: string
   private baseUrl: string
@@ -33,6 +35,46 @@ export class OllamaProvider implements RecommendationProvider {
     this.model = model
     this.baseUrl = baseUrl.replace(/\/$/, '')
     this.timeoutMs = timeoutSecondsWithDefaultToMs(timeoutSeconds, DEFAULT_TIMEOUT_SECONDS)
+  }
+
+  /**
+   * Local embeddings via /api/embed. Uses OLLAMA_EMBEDDING_MODEL (must be
+   * pulled on the Ollama host: `ollama pull nomic-embed-text`).
+   */
+  async embed(texts: string[]): Promise<number[][]> {
+    this.lastUsage = null
+    const out: number[][] = []
+    for (let i = 0; i < texts.length; i += 64) {
+      const chunk = texts.slice(i, i + 64)
+      const vectors = await withTimeout(
+        this.timeoutMs,
+        'Ollama embedding request',
+        async (signal) => {
+          const res = await fetchWithRetry(
+            `${this.baseUrl}/api/embed`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: OLLAMA_EMBEDDING_MODEL, input: chunk }),
+              signal,
+            },
+            { providerLabel: 'ollama' },
+          )
+          const data = (await res.json()) as { embeddings?: number[][] }
+          return data.embeddings ?? []
+        },
+      )
+      if (vectors.length !== chunk.length)
+        throw new Error('Ollama returned the wrong number of embeddings')
+      out.push(...vectors)
+    }
+    this.lastUsage = {
+      provider: 'ollama',
+      model: OLLAMA_EMBEDDING_MODEL,
+      inputTokens: 0,
+      outputTokens: 0,
+    }
+    return out
   }
 
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {

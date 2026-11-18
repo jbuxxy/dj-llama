@@ -582,6 +582,13 @@
       "when": 1794977850697,
       "tag": "0082_ai_usage",
       "breakpoints": true
+    },
+    {
+      "idx": 83,
+      "version": "7",
+      "when": 1794979031672,
+      "tag": "0083_artist_embeddings",
+      "breakpoints": true
     }
   ]
 }

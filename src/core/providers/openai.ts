@@ -32,6 +32,29 @@ export class OpenAIProvider implements RecommendationProvider {
     this.model = model
   }
 
+  /** text-embedding-3-small, shortened to 256 dimensions (the API supports truncation natively). */
+  async embed(texts: string[]): Promise<number[][]> {
+    this.lastUsage = null
+    const out: number[][] = []
+    let tokens = 0
+    for (let i = 0; i < texts.length; i += 512) {
+      const res = await this.client.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: texts.slice(i, i + 512),
+        dimensions: 256,
+      })
+      for (const d of [...res.data].sort((a, b) => a.index - b.index)) out.push(d.embedding)
+      tokens += res.usage?.prompt_tokens ?? 0
+    }
+    this.lastUsage = {
+      provider: 'openai',
+      model: 'text-embedding-3-small',
+      inputTokens: tokens,
+      outputTokens: 0,
+    }
+    return out
+  }
+
   private buildRequest(profile: TasteProfile) {
     const prompt = buildRecommendationPrompt(profile)
     const schema = getAiRecommendationsJsonSchema()

@@ -785,7 +785,11 @@ export function RecommendationCard({
                 />
               )}
             </div>
-            <WhyRecommendedButton reasoning={rec.aiReasoning} sources={rec.sources} />
+            <WhyRecommendedButton
+              reasoning={rec.aiReasoning}
+              sources={rec.sources}
+              artist={{ mbid: rec.artist.mbid, name: rec.artist.name }}
+            />
             <div className="shrink-0">
               <ActionButtons
                 rec={rec}
@@ -835,6 +839,7 @@ export function RecommendationCard({
                 <WhyRecommendedButton
                   reasoning={rec.aiReasoning}
                   sources={rec.sources}
+                  artist={{ mbid: rec.artist.mbid, name: rec.artist.name }}
                   variant="hero"
                 />
               }
