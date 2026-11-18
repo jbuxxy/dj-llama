@@ -6,19 +6,19 @@ vi.mock('@/db/queries/users', () => ({
   getUserByPlexAccountId: vi.fn(),
 }))
 
-vi.mock('@/db/queries/plex-scrobbles', () => ({
-  recordPlexScrobble: vi.fn(),
+vi.mock('@/db/queries/listening-events', () => ({
+  recordListeningEvent: vi.fn(),
 }))
 
 import { realtimeBroker } from '@/core/realtime/broker'
-import { recordPlexScrobble } from '@/db/queries/plex-scrobbles'
+import { recordListeningEvent } from '@/db/queries/listening-events'
 import { getUserByPlexAccountId } from '@/db/queries/users'
 import type { AppDependencies } from '@/server'
 import { createApp } from '@/server'
 import { webhookRoutes } from '@/server/routes/webhooks'
 
 const mockGetUserByPlexAccountId = vi.mocked(getUserByPlexAccountId)
-const mockRecordPlexScrobble = vi.mocked(recordPlexScrobble)
+const mockRecordListeningEvent = vi.mocked(recordListeningEvent)
 
 const FAKE_USER = { id: 7 } as never
 
@@ -49,7 +49,7 @@ describe('POST /api/v1/webhooks/plex', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(mockRecordPlexScrobble).not.toHaveBeenCalled()
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
   })
 
   it('ignores payloads with no Account.id without touching the db', async () => {
@@ -86,7 +86,7 @@ describe('POST /api/v1/webhooks/plex', () => {
 
   it('records a media.scrobble event for a matched track and publishes a realtime update', async () => {
     mockGetUserByPlexAccountId.mockResolvedValue(FAKE_USER)
-    mockRecordPlexScrobble.mockResolvedValue(undefined)
+    mockRecordListeningEvent.mockResolvedValue(undefined)
     const publishSpy = vi.spyOn(realtimeBroker, 'publish').mockImplementation(() => {})
     const app = buildApp()
 
@@ -100,12 +100,49 @@ describe('POST /api/v1/webhooks/plex', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(mockRecordPlexScrobble).toHaveBeenCalledWith(
+    expect(mockRecordListeningEvent).toHaveBeenCalledWith(
       {},
       expect.objectContaining({ userId: 7, artistName: 'Artist', trackName: 'Song' }),
     )
     expect(publishSpy).toHaveBeenCalledWith(7, { type: 'listening-updated' })
     publishSpy.mockRestore()
+  })
+
+  it('records an early media.stop as a skipped play', async () => {
+    mockGetUserByPlexAccountId.mockResolvedValue(FAKE_USER)
+    mockRecordListeningEvent.mockResolvedValue(undefined)
+    const app = buildApp()
+    const meta = {
+      type: 'track',
+      ratingKey: 'rk-skip-1',
+      title: 'Skipped Song',
+      grandparentTitle: 'Artist',
+      duration: 240_000,
+    }
+    await app.request('/api/v1/webhooks/plex', {
+      method: 'POST',
+      body: payloadBody({ event: 'media.play', Account: { id: 4242 }, Metadata: meta }),
+    })
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
+
+    await app.request('/api/v1/webhooks/plex', {
+      method: 'POST',
+      body: payloadBody({
+        event: 'media.stop',
+        Account: { id: 4242 },
+        Metadata: { ...meta, viewOffset: 12_000 },
+      }),
+    })
+    expect(mockRecordListeningEvent).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        userId: 7,
+        ratingKey: 'rk-skip-1',
+        completed: false,
+        skipped: true,
+        listenedMs: 12_000,
+      }),
+    )
   })
 
   it('does not record a scrobble for a matched account when Metadata.type is not "track"', async () => {
@@ -122,7 +159,7 @@ describe('POST /api/v1/webhooks/plex', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(mockRecordPlexScrobble).not.toHaveBeenCalled()
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
   })
 
   it('does not record a scrobble when track/artist title is missing', async () => {
@@ -139,7 +176,7 @@ describe('POST /api/v1/webhooks/plex', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(mockRecordPlexScrobble).not.toHaveBeenCalled()
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
   })
 
   it('ignores unrecognized event types for a matched account', async () => {
@@ -152,7 +189,7 @@ describe('POST /api/v1/webhooks/plex', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(mockRecordPlexScrobble).not.toHaveBeenCalled()
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
   })
 
   it('dispatches library.new events to handleLibraryWebhookEvent for the matched user', async () => {
@@ -167,7 +204,7 @@ describe('POST /api/v1/webhooks/plex', () => {
 
     expect(res.status).toBe(200)
     expect(handleLibraryWebhookEvent).toHaveBeenCalledWith(7)
-    expect(mockRecordPlexScrobble).not.toHaveBeenCalled()
+    expect(mockRecordListeningEvent).not.toHaveBeenCalled()
   })
 
   it('does not throw when handleLibraryWebhookEvent is not configured', async () => {

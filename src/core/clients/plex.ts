@@ -14,6 +14,9 @@ export type PlexRecentTrack = {
   artistName: string
   trackName: string
   viewedAt: number
+  ratingKey?: string
+  albumTitle?: string
+  durationMs?: number
 }
 
 export type PlexFavoriteTrack = {
@@ -54,6 +57,9 @@ type PlexHistoryResponse = {
       grandparentTitle: string
       title: string
       viewedAt: number
+      ratingKey?: string
+      parentTitle?: string
+      duration?: number
     }>
   }
 }
@@ -287,6 +293,9 @@ export function createPlexClient(
         artistName: m.grandparentTitle,
         trackName: m.title,
         viewedAt: m.viewedAt * 1000,
+        ...(m.ratingKey ? { ratingKey: m.ratingKey } : {}),
+        ...(m.parentTitle ? { albumTitle: m.parentTitle } : {}),
+        ...(typeof m.duration === 'number' ? { durationMs: m.duration } : {}),
       }))
     return { tracks, total: res.MediaContainer.totalSize ?? tracks.length }
   }

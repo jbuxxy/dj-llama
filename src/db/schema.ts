@@ -615,25 +615,44 @@ export const playlistMissingTracks = pgTable(
   }),
 )
 
-// Push-based recent-play signal from Plex's own webhook feature (Plex Pass
-// required on the Plex side) -- see src/server/routes/webhooks.ts. Only Plex
-// supports an inbound webhook; other sources have no equivalent and stay
-// poll-based via getRecentListening(). Pruned to the
-// most recent PLEX_SCROBBLE_CAP rows per user (see queries/plex-scrobbles.ts)
-// so this never grows unbounded for an always-on webhook.
-export const plexScrobbles = pgTable(
-  'plex_scrobbles',
+// One row per play of a track: completed plays (Plex scrobbles) plus the
+// early stops and skips the webhook session tracker sees (see
+// core/listening/sessions.ts and server/routes/webhooks.ts), and completed
+// plays backfilled nightly from Plex's history API for users whose webhooks
+// aren't set up (core/listening/history-backfill.ts). Feeds recent-play taste
+// signals, track skip penalties and recommendation outcomes. Pruned by age
+// (LISTENING_RETENTION_DAYS), not by row count, so a year of history survives
+// for the outcome window.
+export const listeningEvents = pgTable(
+  'listening_events',
   {
     id: serial('id').primaryKey(),
     userId: integer('user_id')
       .references(() => users.id, { onDelete: 'cascade' })
       .notNull(),
+    ratingKey: text('rating_key'),
     artistName: text('artist_name').notNull(),
     trackName: text('track_name').notNull(),
+    albumName: text('album_name'),
+    durationMs: integer('duration_ms'),
+    listenedMs: integer('listened_ms'),
+    completed: boolean('completed').notNull().default(true),
+    skipped: boolean('skipped').notNull().default(false),
+    source: text('source').$type<'webhook' | 'history'>().notNull().default('webhook'),
     playedAt: timestamp('played_at', { withTimezone: true }).notNull(),
   },
   (table) => ({
-    userPlayedAtIdx: index('plex_scrobbles_user_played_at_idx').on(table.userId, table.playedAt),
+    userPlayedAtIdx: index('listening_events_user_played_at_idx').on(table.userId, table.playedAt),
+    userRatingKeyIdx: index('listening_events_user_rating_key_idx').on(
+      table.userId,
+      table.ratingKey,
+    ),
+    // Makes the nightly history backfill idempotent.
+    uniquePlay: uniqueIndex('listening_events_user_key_played_uniq').on(
+      table.userId,
+      table.ratingKey,
+      table.playedAt,
+    ),
   }),
 )
 

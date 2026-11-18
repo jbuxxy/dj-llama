@@ -17,7 +17,7 @@ import {
 import type { AiProviderRegistry } from '@/core/providers/registry'
 import type { Database } from '@/db'
 import { getPopularityMap } from '@/db/queries/artist-metadata'
-import { getRecentPlexScrobbles } from '@/db/queries/plex-scrobbles'
+import { getRecentPlays } from '@/db/queries/listening-events'
 import { listRequestsForUser, toRequestHistoryEntries } from '@/db/queries/requests'
 import { getSettings } from '@/db/queries/settings'
 import { getUserConnections } from '@/db/queries/users'
@@ -156,9 +156,7 @@ export function buildStrategyDeps(
     const [{ tracks: liked }, recentPlays, { items: requestRows }, popularityMap, genreRows] =
       await Promise.all([
         collectLikedTracks(sources),
-        getRecentPlexScrobbles(db, userId, 100).then((plays) =>
-          collectRecentPlays(sources, 100, plays),
-        ),
+        getRecentPlays(db, userId, 100).then((plays) => collectRecentPlays(sources, 100, plays)),
         listRequestsForUser(db, userId, { limit: 50 }),
         getPopularityMap(db),
         loadLibraryGenres(userId),
@@ -261,9 +259,7 @@ export function buildStrategyDeps(
 
     const [{ tracks: liked }, recentPlays, genreRows] = await Promise.all([
       collectLikedTracks(sources),
-      getRecentPlexScrobbles(db, userId, 300).then((plays) =>
-        collectRecentPlays(sources, 300, plays),
-      ),
+      getRecentPlays(db, userId, 300).then((plays) => collectRecentPlays(sources, 300, plays)),
       loadLibraryGenres(userId),
     ])
 

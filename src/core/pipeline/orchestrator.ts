@@ -334,8 +334,8 @@ export class PipelineOrchestrator extends EventEmitter {
         try {
           const [likedTracksResult, plexWebhookPlays] = await Promise.all([
             collectLikedTracks(registry.all()),
-            deps.userId != null && db.getRecentPlexScrobbles
-              ? db.getRecentPlexScrobbles(deps.userId, 100)
+            deps.userId != null && db.getRecentPlays
+              ? db.getRecentPlays(deps.userId, 100)
               : Promise.resolve([]),
           ])
           const recentPlays = await collectRecentPlays(registry.all(), 100, plexWebhookPlays)

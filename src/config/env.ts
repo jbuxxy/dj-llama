@@ -82,6 +82,7 @@ export const envConfig = {
   // Job history retention: finished job_runs rows older than this many days
   // are pruned nightly. 0 keeps everything.
   jobRetentionDays: envInt('DJLLAMA_JOB_RETENTION_DAYS') ?? 90,
+  listeningRetentionDays: envInt('DJLLAMA_LISTENING_RETENTION_DAYS') ?? 400,
 
   // Auth
   authToken: env('DJLLAMA_AUTH_TOKEN') ?? null,

@@ -45,6 +45,7 @@ import { createPlexLibrarySource } from './core/library/sources/plex'
 import { createLibrarySyncStore } from './core/library/store'
 import { createSyncOrchestrator, type SyncOrchestrator } from './core/library/sync'
 import { markShuttingDown } from './core/lifecycle'
+import { backfillPlexHistory } from './core/listening/history-backfill'
 import { dispatch } from './core/notifications'
 import { CronScheduler } from './core/ops/cron-scheduler'
 import { isMaintenance, setMaintenance } from './core/ops/maintenance'
@@ -135,6 +136,7 @@ import {
   saveLibraryHealthState,
 } from './db/queries/library-health'
 import { getCachedLidarrIds } from './db/queries/lidarr-cache'
+import { getRecentPlays } from './db/queries/listening-events'
 import {
   deletePlaylistMissingTrack,
   fillMissingTrackCovers,
@@ -155,7 +157,6 @@ import {
   replacePlaylistTracks,
   updatePlaylist as updatePlaylistRow,
 } from './db/queries/playlists'
-import { getRecentPlexScrobbles } from './db/queries/plex-scrobbles'
 import {
   bulkDelete,
   bulkUpdateStatus,
@@ -342,7 +343,7 @@ const storeDb: StoreDb = {
       userId,
       maxArtists,
     ),
-  getRecentPlexScrobbles: (userId, limit) => getRecentPlexScrobbles(db, userId, limit),
+  getRecentPlays: (userId, limit) => getRecentPlays(db, userId, limit),
 }
 
 jobRecorder = createJobRecorder(db)
@@ -2336,6 +2337,34 @@ let librarySyncCron: Cron | null = null
 let libraryHealthCron: Cron | null = null
 let stuckDetectorCron: Cron | null = null
 let jobRetentionCron: Cron | null = null
+let listeningBackfillCron: Cron | null = null
+
+// Nightly: pull each Plex user's play history into listening_events (see
+// core/listening/history-backfill.ts). Sequential -- it's a handful of
+// paged history calls per user, and Plex's history endpoint is slow.
+async function backfillListeningHistory(): Promise<void> {
+  const settings = await getSettings(db)
+  if (!settings) return
+  for (const user of await listUsers(db)) {
+    try {
+      const [conn, prefs] = await Promise.all([
+        getUserConnections(db, user.id),
+        resolveUserPreferences(db, settings.preferences, user.id),
+      ])
+      if (!conn?.plexUrl || !conn.plexToken) continue
+      if (mergePreferences(prefs).historySourcesEnabled?.plex === false) continue
+      const client = createPlexClient(conn.plexUrl, conn.plexToken, {
+        sectionId: conn.plexSectionId,
+        historyToken: settings.plexAdminToken,
+        username: conn.username,
+      })
+      const added = await backfillPlexHistory(db, user.id, client)
+      if (added > 0) console.log(`[listening-backfill] user ${user.id}: +${added} play(s)`)
+    } catch (err) {
+      console.warn(`[listening-backfill] user ${user.id} failed:`, errMsg(err))
+    }
+  }
+}
 let digestNotifierCron: Cron | null = null
 let plexUserSyncCron: Cron | null = null
 
@@ -2477,7 +2506,7 @@ async function computeTasteProfile(
 
   const [likedResult, recentPlays, recentlyAdded] = await Promise.all([
     collectLikedTracks(sources, 200),
-    collectRecentPlays(sources, 200),
+    getRecentPlays(db, userId, 200).then((plays) => collectRecentPlays(sources, 200, plays)),
     collectRecentlyAdded(sources, 100),
   ])
   const profile = buildTrackTasteProfile(
@@ -2780,6 +2809,14 @@ const server = serve({ fetch: app.fetch, port })
 
     stuckDetectorCron = startStuckDetector(jobRecorder)
     jobRetentionCron = startJobRetention(db)
+    listeningBackfillCron = new Cron('37 4 * * *', async () => {
+      if (isMaintenance()) return
+      await backfillListeningHistory()
+    })
+    // First run soon after boot, so a fresh install has history before the night.
+    setTimeout(() => {
+      if (!isMaintenance()) void backfillListeningHistory()
+    }, 120_000)
 
     // Start scheduled notification digest (no-op until digestCron is configured)
     digestNotifierCron = await startDigestNotifier(buildDigestDeps())
@@ -2832,6 +2869,7 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const) {
     playlistScheduler.stopAll()
     stuckDetectorCron?.stop()
     jobRetentionCron?.stop()
+    listeningBackfillCron?.stop()
     digestNotifierCron?.stop()
     librarySyncCron?.stop()
     libraryHealthCron?.stop()

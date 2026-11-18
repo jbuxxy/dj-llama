@@ -88,11 +88,11 @@ export interface StoreDb {
   ) => Promise<Array<{ artistName: string; albumTitle?: string; createdAt: Date }>>
 
   // Push-based recent-play cache from Plex's own webhook feature (see
-  // db/queries/plex-scrobbles.ts, server/routes/webhooks.ts) -- preferred
+  // db/queries/listening-events.ts, server/routes/webhooks.ts) -- preferred
   // over polling Plex's getRecentListening() when it has entries. Optional:
   // orchestrator.ts falls back to polling alone when a StoreDb implementation
   // (or test mock) doesn't provide it.
-  getRecentPlexScrobbles?: (
+  getRecentPlays?: (
     userId: number,
     limit: number,
   ) => Promise<Array<{ artistName: string; trackName: string; playedAt: Date }>>

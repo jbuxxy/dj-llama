@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
+import { ListeningSessions, type PlexPlayEvent } from '@/core/listening/sessions'
 import { realtimeBroker } from '@/core/realtime/broker'
-import { recordPlexScrobble } from '@/db/queries/plex-scrobbles'
+import { recordListeningEvent } from '@/db/queries/listening-events'
 import { getUserByPlexAccountId } from '@/db/queries/users'
 import type { AppDependencies } from '@/server'
 import type { HonoEnv } from '@/server/types'
@@ -14,10 +15,25 @@ type PlexWebhookPayload = {
   Account?: { id?: number }
   Metadata?: {
     type?: string
+    ratingKey?: string
     title?: string
+    parentTitle?: string
     grandparentTitle?: string
+    duration?: number
+    viewOffset?: number
   }
 }
+
+const PLAY_EVENTS = new Set<string>([
+  'media.play',
+  'media.pause',
+  'media.resume',
+  'media.stop',
+  'media.scrobble',
+])
+
+// One tracker for the process; it's keyed by Plex account, so users never mix.
+const sessions = new ListeningSessions()
 
 /**
  * Inbound webhook receiver for Plex's native "Webhooks" feature (Plex Pass
@@ -29,8 +45,11 @@ type PlexWebhookPayload = {
  * ignored (always 200, never leaks whether an account matched, never makes
  * Plex retry-storm on something we don't understand).
  *
- * Two event types handled:
- * - `media.scrobble` (a completed play), recorded as a push-based
+ * Event types handled:
+ * - `media.play` / `pause` / `resume` / `stop` / `scrobble`, fed through
+ *   core/listening/sessions.ts so every play lands in listening_events as
+ *   completed, partial or skipped (skips need the stop/next-play events --
+ *   Plex only scrobbles past ~90%). Completed plays are a push-based
  *   alternative/supplement to the existing poll-based getRecentListening()
  *   -- see core/pipeline/collect-tracks.ts's collectRecentPlays, which
  *   prefers this cache for Plex when it has entries. Also broadcasts
@@ -69,21 +88,48 @@ export function webhookRoutes(deps: AppDependencies) {
         return c.body(null, 200)
       }
 
-      if (payload.event !== 'media.scrobble') return c.body(null, 200)
-      if (payload.Metadata?.type !== 'track') return c.body(null, 200)
+      if (!PLAY_EVENTS.has(payload.event)) return c.body(null, 200)
+      const meta = payload.Metadata
+      if (meta?.type !== 'track') return c.body(null, 200)
 
-      const artistName = payload.Metadata.grandparentTitle
-      const trackName = payload.Metadata.title
+      const artistName = meta.grandparentTitle
+      const trackName = meta.title
       if (!artistName || !trackName) return c.body(null, 200)
 
-      await recordPlexScrobble(deps.db, {
-        userId: user.id,
-        artistName,
-        trackName,
-        playedAt: new Date(),
-      })
-      clearListeningCache(user.id)
-      realtimeBroker.publish(user.id, { type: 'listening-updated' })
+      const closed = sessions.handle(
+        plexAccountId,
+        payload.event as PlexPlayEvent,
+        {
+          // Without a ratingKey, name identity is the best session key we have.
+          ratingKey: meta.ratingKey ?? `${artistName}\u0000${trackName}`,
+          artistName,
+          trackName,
+          albumName: meta.parentTitle ?? null,
+          durationMs: typeof meta.duration === 'number' ? meta.duration : null,
+        },
+        typeof meta.viewOffset === 'number' ? meta.viewOffset : null,
+      )
+      if (closed.length === 0) return c.body(null, 200)
+
+      for (const play of closed) {
+        await recordListeningEvent(deps.db, {
+          userId: user.id,
+          ratingKey: play.ratingKey.includes('\u0000') ? null : play.ratingKey,
+          artistName: play.artistName,
+          trackName: play.trackName,
+          albumName: play.albumName ?? null,
+          durationMs: play.durationMs ?? null,
+          listenedMs: play.listenedMs,
+          completed: play.completed,
+          skipped: play.skipped,
+          source: 'webhook',
+          playedAt: play.playedAt,
+        })
+      }
+      if (closed.some((p) => p.completed)) {
+        clearListeningCache(user.id)
+        realtimeBroker.publish(user.id, { type: 'listening-updated' })
+      }
       return c.body(null, 200)
     } catch (err) {
       console.warn('[webhooks] Plex webhook failed:', err)
