@@ -1774,6 +1774,9 @@ async function executePlaylistImport(playlist: PlaylistRow, jobId: number | null
       playlistId: playlist.id,
       artistName: t.artistName,
       trackName: t.trackName,
+      // The matched Plex track: imports keep the source's order (no DJ
+      // ordering) but still get BPM/key badges, energy and moods.
+      ratingKey: importResult.trackRatingKeys[position] ?? null,
       position,
     })),
   )

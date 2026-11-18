@@ -13,6 +13,8 @@ export type ExternalImportResult = {
   tracksTotal: number
   tracksMatched: number
   missingCount: number
+  /** Per input track, in order: the Plex track it matched, or null. */
+  trackRatingKeys: Array<string | null>
 }
 
 export type MissingTracksDb = {
@@ -100,5 +102,6 @@ export async function importExternalPlaylistToPlex(opts: {
     tracksTotal: opts.tracks.length,
     tracksMatched: result.itemsAdded ?? 0,
     missingCount: missingTracks.length,
+    trackRatingKeys: opts.tracks.map((_, i) => result.itemRatingKeys?.[i] ?? null),
   }
 }

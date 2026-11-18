@@ -50,6 +50,8 @@ export type PlaylistResult = {
   error?: string
   /** Items that could not be matched/added, so callers can react (e.g. flag as a missing-album recommendation). */
   unmatchedItems?: UnmatchedPlaylistItem[]
+  /** Per input item, in order: the Plex track it matched, or null. */
+  itemRatingKeys?: Array<string | null>
 }
 
 export interface DestinationTarget {

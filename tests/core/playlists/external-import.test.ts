@@ -38,6 +38,7 @@ describe('importExternalPlaylistToPlex', () => {
       playlistName: 'My Mix',
       itemsAdded: 2,
       unmatchedItems: [],
+      itemRatingKeys: ['101', '102'],
     })
 
     const result = await importExternalPlaylistToPlex({
@@ -71,6 +72,7 @@ describe('importExternalPlaylistToPlex', () => {
       tracksTotal: 2,
       tracksMatched: 2,
       missingCount: 0,
+      trackRatingKeys: ['101', '102'],
     })
     expect(reconcileMissingTracks).toHaveBeenCalledWith(12, [])
   })
@@ -111,6 +113,7 @@ describe('importExternalPlaylistToPlex', () => {
         { artistName: 'Aphex Twin', trackName: 'Xtal' },
         { artistName: 'Boards of Canada', trackName: 'Roygbiv' },
       ],
+      itemRatingKeys: [null, null, '303'],
     })
 
     const result = await importExternalPlaylistToPlex({
@@ -145,6 +148,8 @@ describe('importExternalPlaylistToPlex', () => {
       tracksTotal: 3,
       tracksMatched: 1,
       missingCount: 2,
+      // Lined up with the input tracks, so each saved row gets its Plex track.
+      trackRatingKeys: [null, null, '303'],
     })
   })
 

@@ -385,11 +385,15 @@ export function createPlexPlaylistTarget(
         )
         const ratingKeys: string[] = []
         const unmatchedItems: UnmatchedPlaylistItem[] = []
+        const matchedBy = new Map<PlaylistItem, string>()
         withTitles.forEach((item, i) => {
           const outcome = outcomes[i] as SearchOutcome
-          if (outcome.ratingKey) ratingKeys.push(outcome.ratingKey)
-          else unmatchedItems.push({ ...item, reason: outcome.reason })
+          if (outcome.ratingKey) {
+            ratingKeys.push(outcome.ratingKey)
+            matchedBy.set(item, outcome.ratingKey)
+          } else unmatchedItems.push({ ...item, reason: outcome.reason })
         })
+        const itemRatingKeys = items.map((item) => matchedBy.get(item) ?? null)
 
         // Caller only wants to know what's matched/missing (e.g. an import
         // whose "Push to Plexamp" toggle is off) -- skip touching the actual
@@ -401,6 +405,7 @@ export function createPlexPlaylistTarget(
             targetId,
             itemsAdded: ratingKeys.length,
             unmatchedItems,
+            itemRatingKeys,
           }
         }
 
@@ -452,6 +457,7 @@ export function createPlexPlaylistTarget(
           playlistName: playlist.title,
           itemsAdded: ratingKeys.length,
           unmatchedItems,
+          itemRatingKeys,
         }
       } catch (err: unknown) {
         return {

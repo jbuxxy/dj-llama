@@ -271,6 +271,8 @@ describe('createPlexPlaylistTarget', () => {
     ])
 
     expect(result).toMatchObject({ success: true, itemsAdded: 1, unmatchedItems: [] })
+    expect(result?.itemRatingKeys).toHaveLength(1)
+    expect(result?.itemRatingKeys?.[0]).toEqual(expect.any(String))
     const createUrl = decodeURIComponent(
       String(
         fetchMock.mock.calls.find(
