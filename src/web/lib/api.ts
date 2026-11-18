@@ -1458,6 +1458,7 @@ export type AiUsageReport = {
   byDay: Array<{ day: string; costUsd: number; calls: number }>
   byModel: Array<{ provider: string; model: string; calls: number; costUsd: number }>
   month: { since: string; spentUsd: number; budgetUsd: number | null }
+  batchMode?: { enabled: boolean; supported: boolean }
 }
 export const getAiUsage = (days = 30) => fetchApi<AiUsageReport>(`/analytics/ai-usage?days=${days}`)
 

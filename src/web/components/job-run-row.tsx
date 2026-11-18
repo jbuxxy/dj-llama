@@ -90,6 +90,14 @@ export function JobRunRow({ job }: { job: JobRun }) {
               stuck
             </span>
           )}
+          {job.status === 'waiting_ai' && (
+            <span
+              className="rounded bg-blue-500/15 px-1.5 py-0.5 text-xs text-blue-500"
+              title="Waiting on the AI provider's batch API (cheaper mode). Can take minutes to hours."
+            >
+              waiting for AI batch
+            </span>
+          )}
           {job.status === 'interrupted' && (
             <span
               className="rounded bg-muted/15 px-1.5 py-0.5 text-xs text-muted"

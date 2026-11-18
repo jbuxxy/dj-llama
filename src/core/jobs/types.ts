@@ -46,4 +46,5 @@ export interface JobRecorder {
   fail(jobId: number, error: string): Promise<void>
   markStuck(): Promise<number>
   markInterrupted(): Promise<number>
+  setStatus?(jobId: number, status: 'running' | 'waiting_ai'): Promise<void>
 }

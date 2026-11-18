@@ -12,6 +12,16 @@ export type AiUsage = {
   cacheReadInputTokens?: number
   /** Anthropic-specific: tokens written to the prompt cache. */
   cacheCreationInputTokens?: number
+  /** Served through the provider's batch API (half price). */
+  batch?: boolean
+}
+
+export type BatchState = 'pending' | 'running' | 'succeeded' | 'failed' | 'expired' | 'cancelled'
+
+export type BatchStatus = {
+  state: BatchState
+  /** Present once state is 'succeeded': per request key, the parsed result or why it failed. */
+  results?: Map<string, { recs: AiRecommendation[]; usage: AiUsage | null } | { error: string }>
 }
 
 export interface RecommendationProvider {
@@ -32,6 +42,13 @@ export interface RecommendationProvider {
    * provider/model). Optional -- only providers with an embeddings API have it.
    */
   embed?(texts: string[]): Promise<number[][]>
+  /**
+   * Batch API (about half price, results in minutes to hours). Optional --
+   * see core/providers/batch.ts, which turns these into an ordinary
+   * getRecommendations for scheduled scans.
+   */
+  submitBatch?(requests: Array<{ key: string; profile: TasteProfile }>): Promise<string>
+  getBatch?(batchId: string): Promise<BatchStatus>
   /**
    * Usage reported by the most recent `getRecommendations` call, or null if
    * the call never ran or the provider does not surface usage. Read after a

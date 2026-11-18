@@ -97,6 +97,7 @@ export const preferencesSchema = z.object({
   metadataFallbackUrl: z.string().optional(),
   channels: z.array(notificationChannel).optional(),
   aiMonthlyBudgetUsd: z.number().min(0).max(100_000).optional(),
+  scheduledBatchMode: z.boolean().optional(),
   aiPricingOverrides: z
     .record(
       z.string().min(1).max(100),

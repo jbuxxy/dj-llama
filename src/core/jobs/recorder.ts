@@ -1,4 +1,4 @@
-import { and, eq, lt, sql } from 'drizzle-orm'
+import { and, eq, inArray, lt, sql } from 'drizzle-orm'
 import type { Database } from '@/db'
 import { jobRuns } from '@/db/schema'
 import type { CompleteJobParams, JobRecorder, StartJobParams } from './types'
@@ -79,9 +79,19 @@ export function createJobRecorder(db: Database): JobRecorder {
           completedAt: new Date(),
           error: 'DJ Llama restarted while this was running.',
         })
-        .where(eq(jobRuns.status, 'running'))
+        .where(inArray(jobRuns.status, ['running', 'waiting_ai']))
         .returning({ id: jobRuns.id })
       return result.length
+    },
+
+    // 'waiting_ai' parks a scheduled scan that's waiting on a batch-API
+    // result (core/providers/batch.ts): it can legitimately take hours, so
+    // markStuck (which only looks at 'running') leaves it alone.
+    async setStatus(jobId: number, status: 'running' | 'waiting_ai'): Promise<void> {
+      await db
+        .update(jobRuns)
+        .set({ status })
+        .where(and(eq(jobRuns.id, jobId), inArray(jobRuns.status, ['running', 'waiting_ai'])))
     },
 
     async markStuck(): Promise<number> {

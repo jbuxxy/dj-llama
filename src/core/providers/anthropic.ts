@@ -11,7 +11,7 @@ import {
 } from './prompt'
 import { RecommendationStreamParser } from './stream-parse'
 import { DEFAULT_SDK_TIMEOUT_MS, optionalTimeoutSecondsToMs } from './timeout'
-import type { AiUsage, RecommendationProvider } from './types'
+import type { AiUsage, BatchStatus, RecommendationProvider } from './types'
 
 const RECOMMENDATION_TOOL_NAME = 'emit_recommendations'
 
@@ -100,6 +100,39 @@ export class AnthropicProvider implements RecommendationProvider {
       throw new Error('Unexpected response format from Anthropic API')
     }
     return parseRecommendationResponse(firstContent.text)
+  }
+
+  /** Message Batches API -- same request body as getRecommendations, half price. */
+  async submitBatch(requests: Array<{ key: string; profile: TasteProfile }>): Promise<string> {
+    const batch = await this.client.messages.batches.create({
+      requests: requests.map((r) => ({ custom_id: r.key, params: this.buildRequest(r.profile) })),
+    })
+    return batch.id
+  }
+
+  async getBatch(batchId: string): Promise<BatchStatus> {
+    const batch = await this.client.messages.batches.retrieve(batchId)
+    if (batch.processing_status !== 'ended') {
+      return { state: batch.processing_status === 'canceling' ? 'cancelled' : 'running' }
+    }
+    const results: NonNullable<BatchStatus['results']> = new Map()
+    // Results come back in any order -- keyed by custom_id, never position.
+    for await (const item of await this.client.messages.batches.results(batchId)) {
+      if (item.result.type !== 'succeeded') {
+        results.set(item.custom_id, { error: item.result.type })
+        continue
+      }
+      try {
+        const recs = this.parseMessage(item.result.message)
+        results.set(item.custom_id, {
+          recs,
+          usage: this.lastUsage ? { ...this.lastUsage, batch: true } : null,
+        })
+      } catch (err) {
+        results.set(item.custom_id, { error: errMsg(err) })
+      }
+    }
+    return { state: 'succeeded', results }
   }
 
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {

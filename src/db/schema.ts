@@ -865,6 +865,9 @@ export type Preferences = {
   // Absent/0 budget = no cap. Overrides replace the built-in price for a
   // model id (core/providers/pricing.ts), in USD per 1M tokens.
   aiMonthlyBudgetUsd?: number
+  // Scheduled scans use the provider's batch API (about half price, results
+  // in minutes to hours). Interactive work never does. Absent/false = off.
+  scheduledBatchMode?: boolean
   aiPricingOverrides?: Record<string, { input: number; output: number; cachedInput?: number }>
 }
 

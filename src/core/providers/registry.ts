@@ -1,3 +1,4 @@
+import { BatchingProvider, type BatchOptions, supportsBatch } from './batch'
 import { MeteredProvider, type UsageContext, type UsageRecorder } from './metered'
 import type { RecommendationProvider } from './types'
 
@@ -43,13 +44,17 @@ export class AiProviderRegistry {
     id: string,
     config: AiProviderConfig,
     usage?: UsageContext,
+    /** Route getRecommendations through the batch API when the provider has one (scheduled scans). */
+    batch?: BatchOptions,
   ): Promise<RecommendationProvider> {
     const definition = this.providers.get(id)
     if (!definition) {
       throw new Error(`Unknown AI provider: ${id}`)
     }
     if (usage && this.budgetCheck) await this.budgetCheck()
-    const provider = await definition.create(config)
+    const created = await definition.create(config)
+    const provider =
+      batch && supportsBatch(created) ? new BatchingProvider(created, batch) : created
     return usage && this.usageRecorder
       ? new MeteredProvider(provider, usage, this.usageRecorder)
       : provider

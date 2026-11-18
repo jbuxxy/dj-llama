@@ -22,11 +22,6 @@ ARG DJLLAMA_VERSION=""
 ENV DJLLAMA_GIT_SHA=${DJLLAMA_GIT_SHA}
 ENV DJLLAMA_CHANNEL=${DJLLAMA_CHANNEL}
 ENV DJLLAMA_VERSION=${DJLLAMA_VERSION}
-# Audio analysis for DJ-style playlist ordering (core/audio/): ffmpeg decodes
-# a ~45s excerpt of each track, streamed from Plex over HTTP, to raw PCM; BPM,
-# key and energy are computed in-process.
-RUN apk add --no-cache ffmpeg
-
 ENV NODE_ENV=production
 RUN bun run build
 
@@ -81,6 +76,11 @@ ENV DB_PATH=/app/data
 # of any app we register. Isolated in its own venv so it never touches system
 # pip. Alpine-specific; the slim/debian RUNTIME_IMAGE override isn't in active
 # use (compose always builds alpine) so isn't handled here.
+# Audio analysis for DJ-style playlist ordering (core/audio/): ffmpeg decodes
+# a ~45s excerpt of each track, streamed from Plex over HTTP, to raw PCM; BPM,
+# key and energy are computed in-process.
+RUN apk add --no-cache ffmpeg
+
 RUN apk add --no-cache python3 py3-pip && \
     python3 -m venv /opt/spotify-scraper-venv && \
     /opt/spotify-scraper-venv/bin/pip install --no-cache-dir spotifyscraper==3.9.2

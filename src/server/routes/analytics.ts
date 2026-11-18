@@ -54,9 +54,14 @@ export function analyticsRoutes(deps: AppDependencies) {
       deps.getSettings(),
     ])
     const prefs = settings?.preferences as
-      | { aiMonthlyBudgetUsd?: number; aiPricingOverrides?: Record<string, unknown> }
+      | {
+          aiMonthlyBudgetUsd?: number
+          aiPricingOverrides?: Record<string, unknown>
+          scheduledBatchMode?: boolean
+        }
       | null
       | undefined
+    const provider = (settings as { aiProvider?: string | null } | null)?.aiProvider ?? null
     return c.json({
       ...summary,
       days,
@@ -64,6 +69,11 @@ export function analyticsRoutes(deps: AppDependencies) {
         since: startOfMonth().toISOString(),
         spentUsd: monthSpendUsd,
         budgetUsd: prefs?.aiMonthlyBudgetUsd ?? null,
+      },
+      batchMode: {
+        enabled: prefs?.scheduledBatchMode === true,
+        // Providers with a batch API wired up (core/providers/{gemini,anthropic}.ts).
+        supported: provider === 'gemini' || provider === 'anthropic',
       },
     })
   })

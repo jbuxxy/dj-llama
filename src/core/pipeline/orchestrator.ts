@@ -189,6 +189,24 @@ export class PipelineOrchestrator extends EventEmitter {
                 timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
               },
               { feature: 'pipeline_artists', userId: deps.userId ?? null, jobRunId: jobId ?? null },
+              // Cheaper mode: a scheduled scan has no one waiting, so its AI
+              // calls go through the batch API (core/providers/batch.ts).
+              deps.trigger === 'scheduled' && prefs.scheduledBatchMode
+                ? {
+                    onWaitingChange: (waiting) => {
+                      if (jobId != null)
+                        void deps.jobRecorder?.setStatus?.(
+                          jobId,
+                          waiting ? 'waiting_ai' : 'running',
+                        )
+                      if (waiting)
+                        this.emit('progress', {
+                          stage: 'discover',
+                          message: 'Waiting for the AI batch (cheaper mode, can take a while)...',
+                        })
+                    },
+                  }
+                : undefined,
             )
           : null
 

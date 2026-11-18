@@ -9,7 +9,7 @@ import { readLines } from './read-lines'
 import { fetchWithRetry } from './retry'
 import { RecommendationStreamParser } from './stream-parse'
 import { timeoutSecondsWithDefaultToMs, withTimeout } from './timeout'
-import type { AiUsage, RecommendationProvider } from './types'
+import type { AiUsage, BatchStatus, RecommendationProvider } from './types'
 
 const DEFAULT_MODEL = 'gemini-3-flash-preview'
 const API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models'
@@ -153,6 +153,102 @@ export class GeminiProvider implements RecommendationProvider {
     return out
   }
 
+  /**
+   * Gemini Batch Mode, inline requests. Google's docs show the state and the
+   * results under two different paths (`state`/`metadata.state`,
+   * `dest.inlinedResponses`/`response.inlinedResponses`), so both are read.
+   */
+  async submitBatch(requests: Array<{ key: string; profile: TasteProfile }>): Promise<string> {
+    const res = await fetchWithRetry(
+      `${API_BASE}/${this.model}:batchGenerateContent`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-goog-api-key': this.apiKey },
+        body: JSON.stringify({
+          batch: {
+            display_name: `djllama-${Date.now()}`,
+            input_config: {
+              requests: {
+                requests: requests.map((r) => ({
+                  request: JSON.parse(this.requestBody(r.profile)),
+                  metadata: { key: r.key },
+                })),
+              },
+            },
+          },
+        }),
+      },
+      { providerLabel: 'gemini' },
+    )
+    const data = (await res.json()) as { name?: string }
+    if (!data.name) throw new Error('Gemini did not return a batch name')
+    return data.name
+  }
+
+  async getBatch(batchId: string): Promise<BatchStatus> {
+    const res = await fetchWithRetry(
+      `https://generativelanguage.googleapis.com/v1beta/${batchId}`,
+      { headers: { 'x-goog-api-key': this.apiKey } },
+      { providerLabel: 'gemini' },
+    )
+    type Inlined = {
+      response?: GeminiResponse
+      error?: { message?: string }
+      metadata?: { key?: string }
+    }
+    type BatchBody = {
+      state?: string
+      metadata?: {
+        state?: string
+        output?: { inlinedResponses?: { inlinedResponses?: Inlined[] } }
+      }
+      dest?: { inlinedResponses?: Inlined[] | { inlinedResponses?: Inlined[] } }
+      response?: { inlinedResponses?: Inlined[] | { inlinedResponses?: Inlined[] } }
+    }
+    const data = (await res.json()) as BatchBody
+    const rawState = data.state ?? data.metadata?.state ?? ''
+    const state = geminiBatchState(rawState)
+    if (state !== 'succeeded') return { state }
+    const container =
+      data.dest?.inlinedResponses ??
+      data.response?.inlinedResponses ??
+      data.metadata?.output?.inlinedResponses
+    const list: Inlined[] = Array.isArray(container)
+      ? container
+      : (container?.inlinedResponses ?? [])
+    const results: NonNullable<BatchStatus['results']> = new Map()
+    list.forEach((item, i) => {
+      const key = item.metadata?.key ?? String(i)
+      if (item.error || !item.response) {
+        results.set(key, { error: item.error?.message ?? 'no response' })
+        return
+      }
+      const text = item.response.candidates?.[0]?.content?.parts?.[0]?.text
+      if (!text) {
+        results.set(key, { error: 'empty response' })
+        return
+      }
+      try {
+        const usage = item.response.usageMetadata
+        results.set(key, {
+          recs: parseRecommendationResponse(text),
+          usage: usage
+            ? {
+                provider: 'gemini',
+                model: this.model,
+                inputTokens: usage.promptTokenCount,
+                outputTokens: usage.candidatesTokenCount,
+                batch: true,
+              }
+            : null,
+        })
+      } catch (err) {
+        results.set(key, { error: errMsg(err) })
+      }
+    })
+    return { state, results }
+  }
+
   async getRecommendations(profile: TasteProfile): Promise<AiRecommendation[]> {
     this.lastUsage = null
 
@@ -250,5 +346,24 @@ export class GeminiProvider implements RecommendationProvider {
         message: errMsg(err),
       }
     }
+  }
+}
+
+function geminiBatchState(raw: string): BatchStatus['state'] {
+  // JOB_STATE_* in current docs, BATCH_STATE_* in older ones.
+  const s = raw.replace(/^(JOB|BATCH)_STATE_/, '')
+  switch (s) {
+    case 'SUCCEEDED':
+      return 'succeeded'
+    case 'FAILED':
+      return 'failed'
+    case 'CANCELLED':
+      return 'cancelled'
+    case 'EXPIRED':
+      return 'expired'
+    case 'RUNNING':
+      return 'running'
+    default:
+      return 'pending'
   }
 }

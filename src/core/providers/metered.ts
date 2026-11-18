@@ -118,7 +118,7 @@ export class MeteredProvider implements RecommendationProvider {
         provider: u.provider,
         model: u.model,
         ...normalizeUsage(u),
-        batch: false,
+        batch: u.batch ?? false,
       })
       if (pending) void Promise.resolve(pending).catch((err) => warn(err))
     } catch (err) {

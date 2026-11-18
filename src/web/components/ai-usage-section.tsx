@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { type AiUsageReport, getAiUsage, updateSettings } from '../lib/api'
 import { formatShortDate } from '../lib/intl'
+import { Toggle } from './toggle'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { Skeleton } from './ui/skeleton'
@@ -53,6 +54,7 @@ export function AiUsageSection() {
       ) : (
         <div className="bg-surface border border-border rounded-lg p-4 space-y-5">
           <BudgetMeter month={data.month} />
+          {data.batchMode?.supported && <BatchModeToggle enabled={data.batchMode.enabled} />}
           {data.totals.calls === 0 ? (
             <p className="text-sm text-muted">No AI calls recorded in the last {data.days} days.</p>
           ) : (
@@ -266,6 +268,46 @@ function FeatureBreakdown({ rows }: { rows: AiUsageReport['byFeature'] }) {
           </li>
         ))}
       </ul>
+    </div>
+  )
+}
+
+function BatchModeToggle({ enabled }: { enabled: boolean }) {
+  const queryClient = useQueryClient()
+  const [saving, setSaving] = useState(false)
+  async function change(next: boolean) {
+    setSaving(true)
+    try {
+      await updateSettings({ preferences: { scheduledBatchMode: next } })
+      await queryClient.invalidateQueries({ queryKey: ['analytics', 'ai-usage'] })
+      toast.success(
+        next
+          ? 'Cheaper scheduled scans on: they now use the batch API at about half price'
+          : 'Cheaper scheduled scans off',
+      )
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Failed to save')
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="flex items-start justify-between gap-4 pt-4 border-t border-border">
+      <div>
+        <p className="text-sm text-text">Cheaper scheduled scans</p>
+        <p className="text-xs text-muted">
+          Scheduled scans send their AI requests through the provider's batch API at about half
+          price. Results take minutes to hours, so new picks land later. Scans you start yourself
+          are never batched. Gemini only accepts batch jobs from a billing-enabled API key; on a
+          free-tier key scans quietly fall back to normal calls.
+        </p>
+      </div>
+      <Toggle
+        checked={enabled}
+        onChange={change}
+        label="Cheaper scheduled scans"
+        disabled={saving}
+      />
     </div>
   )
 }
