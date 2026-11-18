@@ -241,12 +241,16 @@ export function pipelineRoutes(deps: AppDependencies) {
         let aiUsage: unknown = null
         if (settings.aiProvider && settings.aiModel) {
           try {
-            const provider = await deps.providerRegistry.create(settings.aiProvider as string, {
-              apiKey: (settings.aiApiKey as string) ?? null,
-              model: settings.aiModel as string,
-              baseUrl: (settings.aiBaseUrl as string) ?? null,
-              timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-            })
+            const provider = await deps.providerRegistry.create(
+              settings.aiProvider as string,
+              {
+                apiKey: (settings.aiApiKey as string) ?? null,
+                model: settings.aiModel as string,
+                baseUrl: (settings.aiBaseUrl as string) ?? null,
+                timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+              },
+              { feature: 'quick_discover', userId: quickDiscoverUserId ?? null },
+            )
             const aiRecs = await provider.getRecommendations({
               topArtists: [{ name: trimmedArtistName, playCount: 100, source: 'seed' as const }],
               topGenres: [],

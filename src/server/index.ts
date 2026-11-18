@@ -6,6 +6,7 @@ import { cors } from 'hono/cors'
 import { HTTPException } from 'hono/http-exception'
 import { secureHeaders } from 'hono/secure-headers'
 import { envConfig } from '@/config/env'
+import { AiBudgetExceededError } from '@/core/providers/budget'
 import { errMsg } from '@/core/validation'
 import { VERSION } from '@/version'
 import { openapiDoc } from './helpers/openapi-doc'
@@ -88,6 +89,9 @@ export function createApp(deps: AppDependencies) {
       // envelope to avoid clobbering specialised payloads.
       if (res.headers.get('content-type')?.includes('application/json')) return res
       return problem(c, `http-${err.status}`, err.message || 'HTTP Error', err.status, undefined)
+    }
+    if (err instanceof AiBudgetExceededError) {
+      return problem(c, 'ai-budget-exceeded', 'AI budget reached', 402, err.message)
     }
     const msg = errMsg(err)
     console.error('[server] unhandled error:', msg, err instanceof Error ? err.stack : '')

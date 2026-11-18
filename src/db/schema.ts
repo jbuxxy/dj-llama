@@ -668,6 +668,41 @@ export const listeningEvents = pgTable(
   }),
 )
 
+// One row per AI call (see core/providers/metered.ts): what it was for, the
+// tokens it used, and the estimated cost at record time (core/providers/
+// pricing.ts). Feeds the AI usage dashboard and the monthly budget check.
+export const aiUsage = pgTable(
+  'ai_usage',
+  {
+    id: serial('id').primaryKey(),
+    userId: integer('user_id').references(() => users.id, { onDelete: 'set null' }),
+    jobRunId: integer('job_run_id'),
+    feature: text('feature').$type<AiFeature>().notNull(),
+    provider: text('provider').notNull(),
+    model: text('model').notNull(),
+    inputTokens: integer('input_tokens').notNull().default(0),
+    outputTokens: integer('output_tokens').notNull().default(0),
+    cachedTokens: integer('cached_tokens').notNull().default(0),
+    batch: boolean('batch').notNull().default(false),
+    costUsd: real('cost_usd'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({
+    createdIdx: index('ai_usage_created_idx').on(table.createdAt),
+  }),
+)
+
+export type AiFeature =
+  | 'pipeline_artists'
+  | 'pipeline_tracks'
+  | 'quick_discover'
+  | 'album_resolve'
+  | 'mood'
+  | 'playlist'
+  | 'taste_title'
+  | 'embedding'
+  | 'other'
+
 export type RecommendationOutcome = 'keeper' | 'tried' | 'unplayed'
 
 export type LearnedWeights = {
@@ -785,6 +820,11 @@ export type Preferences = {
   // (users.learned_weights) instead of scoringWeights, once enough outcomes
   // exist. Absent/false = manual weights.
   autoTuneWeights?: boolean
+  // Global (admin) AI spend controls -- see core/providers/budget.ts.
+  // Absent/0 budget = no cap. Overrides replace the built-in price for a
+  // model id (core/providers/pricing.ts), in USD per 1M tokens.
+  aiMonthlyBudgetUsd?: number
+  aiPricingOverrides?: Record<string, { input: number; output: number; cachedInput?: number }>
 }
 
 export type ScoringWeights = Preferences['scoringWeights']

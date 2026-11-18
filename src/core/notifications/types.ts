@@ -6,6 +6,7 @@ export type NotificationEvent =
   | 'recommendation_approved'
   | 'recommendations_available'
   | 'playlist_generated'
+  | 'ai_budget_reached'
 
 export type WebhookPayload =
   | {
@@ -62,6 +63,13 @@ export type WebhookPayload =
       event: 'playlist_generated'
       playlistId: number
       playlistName: string
+      message: string
+      timestamp: string
+    }
+  | {
+      event: 'ai_budget_reached'
+      spentUsd: number
+      budgetUsd: number
       message: string
       timestamp: string
     }

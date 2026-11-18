@@ -47,7 +47,7 @@ import { createSyncOrchestrator, type SyncOrchestrator } from './core/library/sy
 import { markShuttingDown } from './core/lifecycle'
 import { backfillPlexHistory } from './core/listening/history-backfill'
 import { updateUserOutcomes } from './core/listening/outcomes'
-import { dispatch } from './core/notifications'
+import { dispatch, logDispatchFailures } from './core/notifications'
 import { CronScheduler } from './core/ops/cron-scheduler'
 import { isMaintenance, setMaintenance } from './core/ops/maintenance'
 import { runPreFlightCheck } from './core/ops/upgrade'
@@ -76,6 +76,7 @@ import { buildStrategyDeps } from './core/playlists/strategy-deps'
 import type { ResolvedTrack } from './core/playlists/types'
 import { createPlexSource } from './core/plugins/plex'
 import { SourceRegistry } from './core/plugins/registry'
+import { AiBudgetExceededError, createBudgetGuard } from './core/providers/budget'
 import { buildAlbumResolutionPrompt, buildTasteProfilePrompt } from './core/providers/prompt'
 import { createDefaultRegistry } from './core/providers/registry'
 import { realtimeBroker } from './core/realtime/broker'
@@ -96,6 +97,7 @@ import {
 import { errMsg } from './core/validation'
 import { closeDb, db, pool } from './db'
 import { runMigrations } from './db/migrate'
+import { getMonthSpendUsd, recordAiUsage } from './db/queries/ai-usage'
 import {
   getBlockedAlbumKeys,
   listAlbumBlocks as listAlbumBlocksQuery,
@@ -369,6 +371,18 @@ const scheduler = new CronScheduler('[scheduler]')
 const playlistScheduler = new PlaylistScheduler()
 
 const providerRegistry = createDefaultRegistry()
+// Every metered AI call writes an ai_usage row (cost from the price table plus
+// any admin overrides), and creation is refused once the monthly budget is
+// spent -- see core/providers/metered.ts and budget.ts.
+const aiBudget = createBudgetGuard(async () => {
+  const [spentUsd, settings] = await Promise.all([getMonthSpendUsd(db), getSettings(db)])
+  return { spentUsd, budgetUsd: settings?.preferences?.aiMonthlyBudgetUsd ?? null }
+})
+providerRegistry.setBudgetCheck(() => aiBudget.check())
+providerRegistry.setUsageRecorder(async (record) => {
+  const settings = await getSettings(db)
+  await recordAiUsage(db, record, settings?.preferences?.aiPricingOverrides)
+})
 
 // Map DB genre rows (artistCount: number | null) to GenreInfo (artistCount: number)
 function mapGenreRow(row: Awaited<ReturnType<typeof upsertGenre>>) {
@@ -584,10 +598,36 @@ async function runLibraryWebhookRefresh(): Promise<void> {
 
 // Cron-triggered discovery runs for the admin account, set up exactly like the
 // "Run scan" button (see buildPipelineRun).
+// One "budget reached" notification per calendar month, not one per skipped run.
+let budgetNotifiedMonth: string | null = null
+function notifyBudgetReached(
+  settings: NonNullable<Awaited<ReturnType<typeof getSettings>>>,
+  err: AiBudgetExceededError,
+) {
+  const month = new Date().toISOString().slice(0, 7)
+  if (budgetNotifiedMonth === month) return
+  budgetNotifiedMonth = month
+  void dispatch(decryptChannelSecrets(settings.preferences?.channels ?? []), 'ai_budget_reached', {
+    event: 'ai_budget_reached',
+    spentUsd: err.spentUsd,
+    budgetUsd: err.budgetUsd,
+    message: `${err.message} Scheduled scans are paused until then.`,
+    timestamp: new Date().toISOString(),
+  }).then(logDispatchFailures)
+}
+
 const runPipeline = async () => {
   const currentSettings = await getSettings(db)
   if (!currentSettings?.aiProvider || !currentSettings.aiModel) {
     console.log('[scheduler] Skipping scheduled discovery: no AI provider configured')
+    return
+  }
+  try {
+    await aiBudget.check()
+  } catch (err) {
+    if (!(err instanceof AiBudgetExceededError)) throw err
+    console.log(`[scheduler] Skipping scheduled discovery: ${err.message}`)
+    notifyBudgetReached(currentSettings, err)
     return
   }
   const allUsers = await listUsers(db)
@@ -788,12 +828,16 @@ async function resolveAlbumsWithAi(
   const result = new Map<string, string>()
   if (!settings.aiProvider || !settings.aiModel || tracks.length === 0) return result
   try {
-    const provider = await providerRegistry.create(settings.aiProvider, {
-      apiKey: settings.aiApiKey ?? null,
-      model: settings.aiModel,
-      baseUrl: settings.aiBaseUrl ?? null,
-      timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-    })
+    const provider = await providerRegistry.create(
+      settings.aiProvider,
+      {
+        apiKey: settings.aiApiKey ?? null,
+        model: settings.aiModel,
+        baseUrl: settings.aiBaseUrl ?? null,
+        timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+      },
+      { feature: 'album_resolve' },
+    )
     const recs = await provider.getRecommendations({
       topArtists: [],
       topGenres: [],
@@ -2606,12 +2650,16 @@ async function computeTasteProfile(
   let reasoning: string | undefined
   if (settings.aiProvider && settings.aiModel) {
     try {
-      const provider = await providerRegistry.create(settings.aiProvider, {
-        apiKey: settings.aiApiKey ?? null,
-        model: settings.aiModel,
-        baseUrl: settings.aiBaseUrl ?? null,
-        timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-      })
+      const provider = await providerRegistry.create(
+        settings.aiProvider,
+        {
+          apiKey: settings.aiApiKey ?? null,
+          model: settings.aiModel,
+          baseUrl: settings.aiBaseUrl ?? null,
+          timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+        },
+        { feature: 'taste_title', userId },
+      )
       const prompt = buildTasteProfilePrompt(genres, topArtists)
       const recs = await provider.getRecommendations({
         topArtists: [],

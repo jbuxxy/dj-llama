@@ -1,4 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
+import { AiUsageSection } from '../components/ai-usage-section'
 import { StatCard } from '../components/stat-card'
 import { Skeleton } from '../components/ui/skeleton'
 import {
@@ -250,6 +251,8 @@ export function AnalyticsPage({ embedded = false }: { embedded?: boolean }) {
           <GenreBreakdown genres={genres ?? null} loading={genresLoading} />
         </div>
       </div>
+
+      <AiUsageSection />
     </div>
   )
 }

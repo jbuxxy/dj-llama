@@ -138,6 +138,18 @@ export function formatDiscordPayload(payload: WebhookPayload): Record<string, un
           },
         ],
       }
+    case 'ai_budget_reached':
+      return {
+        embeds: [
+          {
+            title: 'AI Budget Reached',
+            description: payload.message,
+            color: 0xdc2626,
+            timestamp: payload.timestamp,
+            footer,
+          },
+        ],
+      }
   }
 }
 

@@ -13,6 +13,24 @@ function renderWithQuery(ui: ReactElement) {
 }
 
 vi.mock('@/web/lib/api', () => ({
+  getAiUsage: vi.fn().mockResolvedValue({
+    since: '2026-10-18T00:00:00Z',
+    days: 30,
+    totals: {
+      calls: 0,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      costUsd: 0,
+      unpricedCalls: 0,
+      batchSavingsUsd: 0,
+    },
+    byFeature: [],
+    byDay: [],
+    byModel: [],
+    month: { since: '2026-11-01T00:00:00Z', spentUsd: 0, budgetUsd: null },
+  }),
+  updateSettings: vi.fn(),
   getAnalyticsBatches: vi.fn().mockResolvedValue([]),
   getAnalyticsGenres: vi.fn().mockResolvedValue([]),
   getAnalyticsOverview: vi.fn().mockResolvedValue({

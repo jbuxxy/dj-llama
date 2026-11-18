@@ -1,3 +1,4 @@
+import { MeteredProvider, type UsageContext, type UsageRecorder } from './metered'
 import type { RecommendationProvider } from './types'
 
 export type AiProviderConfig = {
@@ -20,12 +21,38 @@ export class AiProviderRegistry {
     this.providers.set(definition.id, definition)
   }
 
-  async create(id: string, config: AiProviderConfig): Promise<RecommendationProvider> {
+  private usageRecorder: UsageRecorder | null = null
+
+  private budgetCheck: (() => Promise<void>) | null = null
+
+  /** Runs before every metered create; throws (e.g. AiBudgetExceededError) to refuse it. */
+  setBudgetCheck(check: (() => Promise<void>) | null): void {
+    this.budgetCheck = check
+  }
+
+  /** Where metered providers send one usage row per call (set once at boot). */
+  setUsageRecorder(recorder: UsageRecorder | null): void {
+    this.usageRecorder = recorder
+  }
+
+  /**
+   * With `usage`, the provider comes back metered: every call records its
+   * tokens and cost against that feature/user (see metered.ts).
+   */
+  async create(
+    id: string,
+    config: AiProviderConfig,
+    usage?: UsageContext,
+  ): Promise<RecommendationProvider> {
     const definition = this.providers.get(id)
     if (!definition) {
       throw new Error(`Unknown AI provider: ${id}`)
     }
-    return definition.create(config)
+    if (usage && this.budgetCheck) await this.budgetCheck()
+    const provider = await definition.create(config)
+    return usage && this.usageRecorder
+      ? new MeteredProvider(provider, usage, this.usageRecorder)
+      : provider
   }
 
   has(id: string): boolean {

@@ -401,12 +401,16 @@ export function buildStrategyDeps(
             const candidates = await buildCandidatePool()
             if (candidates.length === 0) return []
 
-            const provider = await providerRegistry.create(settings.aiProvider, {
-              apiKey: settings.aiApiKey ?? null,
-              model: settings.aiModel,
-              baseUrl: settings.aiBaseUrl ?? null,
-              timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-            })
+            const provider = await providerRegistry.create(
+              settings.aiProvider,
+              {
+                apiKey: settings.aiApiKey ?? null,
+                model: settings.aiModel,
+                baseUrl: settings.aiBaseUrl ?? null,
+                timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+              },
+              { feature: 'playlist', userId },
+            )
 
             const promptCandidates: PlaylistCandidateArtist[] = candidates.map((c) => ({
               name: c.name,
@@ -492,12 +496,16 @@ export function buildStrategyDeps(
               }
             }
 
-            const provider = await providerRegistry.create(settings.aiProvider, {
-              apiKey: settings.aiApiKey ?? null,
-              model: settings.aiModel,
-              baseUrl: settings.aiBaseUrl ?? null,
-              timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-            })
+            const provider = await providerRegistry.create(
+              settings.aiProvider,
+              {
+                apiKey: settings.aiApiKey ?? null,
+                model: settings.aiModel,
+                baseUrl: settings.aiBaseUrl ?? null,
+                timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+              },
+              { feature: 'playlist', userId },
+            )
 
             const promptCandidates: PlaylistAlbumCandidate[] = candidates.map((c) => ({
               artistName: c.artistName,

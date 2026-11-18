@@ -1430,3 +1430,22 @@ export const listJobs = (params?: {
 }
 
 export const getJob = (id: number) => fetchApi<JobRun>(`/jobs/${id}`)
+
+export type AiUsageReport = {
+  since: string
+  days: number
+  totals: {
+    calls: number
+    inputTokens: number
+    outputTokens: number
+    cachedTokens: number
+    costUsd: number
+    unpricedCalls: number
+    batchSavingsUsd: number
+  }
+  byFeature: Array<{ feature: string; calls: number; costUsd: number; tokens: number }>
+  byDay: Array<{ day: string; costUsd: number; calls: number }>
+  byModel: Array<{ provider: string; model: string; calls: number; costUsd: number }>
+  month: { since: string; spentUsd: number; budgetUsd: number | null }
+}
+export const getAiUsage = (days = 30) => fetchApi<AiUsageReport>(`/analytics/ai-usage?days=${days}`)

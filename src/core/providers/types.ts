@@ -28,6 +28,11 @@ export interface RecommendationProvider {
   ): Promise<AiRecommendation[]>
   testConnection(): Promise<{ success: boolean; message: string }>
   /**
+   * Embeds each text into a vector (same length for every text from one
+   * provider/model). Optional -- only providers with an embeddings API have it.
+   */
+  embed?(texts: string[]): Promise<number[][]>
+  /**
    * Usage reported by the most recent `getRecommendations` call, or null if
    * the call never ran or the provider does not surface usage. Read after a
    * successful call; providers reset this on each invocation.

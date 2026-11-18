@@ -8,6 +8,7 @@ import { effectiveWeights } from '@/core/listening/learn-weights'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
 import { createPlexSource } from '@/core/plugins/plex'
 import { LISTENING_SOURCE_IDS, SourceRegistry } from '@/core/plugins/registry'
+import { MeteredProvider, sumUsage } from '@/core/providers/metered'
 import type { AiProviderRegistry } from '@/core/providers/registry'
 import type { SimilarTrackProvider } from '@/core/similarity/providers'
 import { errMsg } from '@/core/validation'
@@ -179,12 +180,16 @@ export class PipelineOrchestrator extends EventEmitter {
 
       const aiProvider =
         providerRegistry && settings.aiProvider && settings.aiModel
-          ? await providerRegistry.create(settings.aiProvider, {
-              apiKey: settings.aiApiKey ?? null,
-              model: settings.aiModel,
-              baseUrl: settings.aiBaseUrl ?? null,
-              timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-            })
+          ? await providerRegistry.create(
+              settings.aiProvider,
+              {
+                apiKey: settings.aiApiKey ?? null,
+                model: settings.aiModel,
+                baseUrl: settings.aiBaseUrl ?? null,
+                timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+              },
+              { feature: 'pipeline_artists', userId: deps.userId ?? null, jobRunId: jobId ?? null },
+            )
           : null
 
       // Recommendations require AI to turn raw listening/library signal into
@@ -195,6 +200,12 @@ export class PipelineOrchestrator extends EventEmitter {
       if (!aiProvider) {
         throw new Error('An AI provider must be configured to generate recommendations')
       }
+      // The track branch runs alongside artist discovery on the same provider;
+      // metered separately so the usage dashboard can tell the two apart.
+      const trackAi =
+        aiProvider instanceof MeteredProvider
+          ? aiProvider.withFeature('pipeline_tracks')
+          : aiProvider
 
       if (
         deps.userId === undefined ||
@@ -355,7 +366,7 @@ export class PipelineOrchestrator extends EventEmitter {
           const similarFailures = new Map<string, string>()
           const discoveredTracks = await discoverSimilarTracks(
             trackTasteProfile,
-            { ai: aiProvider, similar: similarity },
+            { ai: trackAi, similar: similarity },
             {
               libraryArtists: librarySeeds,
               onSourceFailure: (id, error) => similarFailures.set(id, error),
@@ -718,7 +729,10 @@ export class PipelineOrchestrator extends EventEmitter {
             artistsStored: filtered.length,
             artistsFiltered: scored.length - filtered.length,
             ...(tasteProfile.genreCoverage ? { genreCoverage: tasteProfile.genreCoverage } : {}),
-            ...(aiProvider?.lastUsage ? { aiUsage: aiProvider.lastUsage } : {}),
+            ...(() => {
+              const usage = sumUsage(aiProvider?.lastUsage, trackAi?.lastUsage)
+              return usage ? { aiUsage: usage } : {}
+            })(),
           },
           sourceResults,
           batchId,

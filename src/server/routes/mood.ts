@@ -179,12 +179,16 @@ export function moodRoutes(deps: MoodDeps) {
       return apiError(c, 400, 'AI provider not configured')
     }
 
-    const provider = await deps.providerRegistry.create(aiProvider, {
-      apiKey: aiApiKey ?? null,
-      model: aiModel,
-      baseUrl: aiBaseUrl ?? null,
-      timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
-    })
+    const provider = await deps.providerRegistry.create(
+      aiProvider,
+      {
+        apiKey: aiApiKey ?? null,
+        model: aiModel,
+        baseUrl: aiBaseUrl ?? null,
+        timeoutSeconds: envConfig.aiTimeoutSeconds ?? null,
+      },
+      { feature: 'mood', userId: c.get('userId') ?? null },
+    )
     const profile = moodProfile(trimmedQuery)
     const enricher = buildEnricher(deps.db, settings)
     const failureMessage = (err: unknown) =>

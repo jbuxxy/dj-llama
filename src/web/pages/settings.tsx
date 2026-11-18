@@ -279,6 +279,7 @@ const NOTIFICATION_EVENTS: NotificationEvent[] = [
   'request_pending_approval',
   'request_auto_approved',
   'recommendation_approved',
+  'ai_budget_reached',
 ]
 
 // recommendations_available/playlist_generated are per-user-only events (dispatched
@@ -295,6 +296,7 @@ const EVENT_LABEL: Record<NotificationEvent, string> = {
   recommendation_approved: 'Recommendation approved',
   recommendations_available: 'New recommendations available',
   playlist_generated: 'Playlist generated',
+  ai_budget_reached: 'AI budget reached',
 }
 
 function makeChannel(type: ChannelType): NotificationChannel {

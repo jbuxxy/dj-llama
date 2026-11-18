@@ -29,6 +29,7 @@ const notificationEvent = z.enum([
   'recommendation_approved',
   'recommendations_available',
   'playlist_generated',
+  'ai_budget_reached',
 ])
 const channelBase = {
   id: z.string().min(1),
@@ -94,6 +95,17 @@ export const preferencesSchema = z.object({
   fanartApiKey: z.string().optional(),
   metadataFallbackUrl: z.string().optional(),
   channels: z.array(notificationChannel).optional(),
+  aiMonthlyBudgetUsd: z.number().min(0).max(100_000).optional(),
+  aiPricingOverrides: z
+    .record(
+      z.string().min(1).max(100),
+      z.object({
+        input: z.number().min(0).max(1000),
+        output: z.number().min(0).max(1000),
+        cachedInput: z.number().min(0).max(1000).optional(),
+      }),
+    )
+    .optional(),
 })
 // Not .strict(): the client round-trips the whole stored preferences object
 // on every save (see settings.tsx handleSave), and retired fields (e.g.
