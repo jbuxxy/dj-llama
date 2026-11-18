@@ -126,3 +126,28 @@ export async function pruneListeningEvents(db: Database, olderThan: Date): Promi
     .returning({ id: listeningEvents.id })
   return removed.length
 }
+
+/** Distinct Plex ratingKeys this user completed recently, most recent first. */
+export async function getRecentlyPlayedRatingKeys(
+  db: Database,
+  userId: number,
+  limit: number,
+): Promise<string[]> {
+  const rows = await db
+    .select({
+      ratingKey: listeningEvents.ratingKey,
+      last: sql<Date>`max(${listeningEvents.playedAt})`,
+    })
+    .from(listeningEvents)
+    .where(
+      and(
+        eq(listeningEvents.userId, userId),
+        eq(listeningEvents.completed, true),
+        sql`${listeningEvents.ratingKey} is not null`,
+      ),
+    )
+    .groupBy(listeningEvents.ratingKey)
+    .orderBy(sql`2 desc`)
+    .limit(limit)
+  return rows.map((r) => r.ratingKey as string)
+}

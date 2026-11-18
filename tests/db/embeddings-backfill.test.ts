@@ -87,6 +87,35 @@ describe('embedding backfill + service', () => {
     )
   })
 
+  it('waits out a rate limit and retries the same batch', async () => {
+    const { provider } = fakeEmbedder()
+    const real = provider.embed?.bind(provider)
+    let calls = 0
+    provider.embed = async (texts) => {
+      calls++
+      if (calls === 1) throw new Error('rate limited (429)')
+      return real ? real(texts) : []
+    }
+    const result = await backfillEmbeddings(db, provider, 'fake', undefined, {
+      pauseMs: 0,
+      rateLimitWaitMs: 0,
+    })
+    expect(result).toEqual({ embedded: 3, pending: 0 })
+    expect(calls).toBe(2)
+  })
+
+  it('stops after repeated rate limits and reports what is left', async () => {
+    const { provider } = fakeEmbedder()
+    provider.embed = async () => {
+      throw new Error('rate limited (429)')
+    }
+    const result = await backfillEmbeddings(db, provider, 'fake', undefined, {
+      pauseMs: 0,
+      rateLimitWaitMs: 0,
+    })
+    expect(result).toEqual({ embedded: 0, pending: 3 })
+  })
+
   it('reports unavailable when the provider cannot embed', async () => {
     const service = createEmbeddingService({ db, getProvider: async () => null })
     expect(await service.similar(userId, { mbid: null, name: 'Grouper' })).toBeNull()

@@ -116,6 +116,9 @@ export type PlexOwnedTrack = {
   // own play count -- used to bias track selection toward liked/hit songs.
   userRating?: number
   viewCount?: number
+  /** Media part path (/library/parts/...) -- where the audio itself is fetched from. */
+  partKey?: string
+  durationMs?: number
 }
 
 export type PlexMusicSection = {
@@ -136,6 +139,9 @@ export type PlexClient = {
     offset?: number,
   ) => Promise<{ tracks: PlexRecentTrack[]; total: number }>
   getRecentlyPlayedSince: (cutoffMs: number) => Promise<PlexRecentTrack[]>
+  getTrackParts: (
+    ratingKeys: string[],
+  ) => Promise<Array<{ ratingKey: string; partKey: string; durationMs?: number }>>
   getRecentlyAddedAlbums: (limit?: number) => Promise<PlexRecentlyAddedAlbum[]>
   getFavoriteTracks: (limit?: number) => Promise<PlexFavoriteTrack[]>
   getServerName: () => Promise<string | null>
@@ -447,7 +453,8 @@ export function createPlexClient(
           ratingKey?: string
           title: string
           grandparentTitle?: string
-          Media?: Array<{ Part?: Array<{ file?: string }> }>
+          Media?: Array<{ duration?: number; Part?: Array<{ file?: string; key?: string }> }>
+          duration?: number
           userRating?: number
           viewCount?: number
         }>
@@ -463,8 +470,41 @@ export function createPlexClient(
         path: m.Media?.[0]?.Part?.[0]?.file ?? '',
         userRating: m.userRating,
         viewCount: m.viewCount,
+        partKey: m.Media?.[0]?.Part?.[0]?.key,
+        durationMs: m.duration ?? m.Media?.[0]?.duration,
       }))
       .filter((t) => t.path !== '')
+  }
+
+  // Media part keys for known tracks -- the audio analysis crawl starts from
+  // ratingKeys (plays, playlists) that carry no part info. Plex accepts a
+  // comma-separated ratingKey list on /library/metadata.
+  async function getTrackParts(
+    ratingKeys: string[],
+  ): Promise<Array<{ ratingKey: string; partKey: string; durationMs?: number }>> {
+    const out: Array<{ ratingKey: string; partKey: string; durationMs?: number }> = []
+    for (let i = 0; i < ratingKeys.length; i += 50) {
+      const chunk = ratingKeys
+        .slice(i, i + 50)
+        .map(encodeURIComponent)
+        .join(',')
+      const res = await get<{
+        MediaContainer: {
+          Metadata?: Array<{
+            ratingKey: string
+            type?: string
+            duration?: number
+            Media?: Array<{ Part?: Array<{ key?: string }> }>
+          }>
+        }
+      }>(`/library/metadata/${chunk}`)
+      for (const m of res.MediaContainer.Metadata ?? []) {
+        const partKey = m.Media?.[0]?.Part?.[0]?.key
+        if (m.type === 'track' && partKey)
+          out.push({ ratingKey: m.ratingKey, partKey, durationMs: m.duration })
+      }
+    }
+    return out
   }
 
   // Library-wide track search by title -- Plex's `title` filter on a track
@@ -489,7 +529,8 @@ export function createPlexClient(
           grandparentTitle?: string
           originalTitle?: string
           parentTitle?: string
-          Media?: Array<{ Part?: Array<{ file?: string }> }>
+          Media?: Array<{ duration?: number; Part?: Array<{ file?: string; key?: string }> }>
+          duration?: number
           userRating?: number
           viewCount?: number
         }>
@@ -504,6 +545,8 @@ export function createPlexClient(
         path: m.Media?.[0]?.Part?.[0]?.file ?? '',
         userRating: m.userRating,
         viewCount: m.viewCount,
+        partKey: m.Media?.[0]?.Part?.[0]?.key,
+        durationMs: m.duration ?? m.Media?.[0]?.duration,
       }))
       .filter((t) => t.path !== '' && t.artist !== '')
   }
@@ -616,6 +659,7 @@ export function createPlexClient(
     searchTracksByTitle,
     getRecentlyPlayed,
     getRecentlyPlayedSince,
+    getTrackParts,
     getRecentlyAddedAlbums,
     getFavoriteTracks,
     getServerName,

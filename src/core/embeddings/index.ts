@@ -171,15 +171,29 @@ export function embeddingModelFor(providerId: string | null | undefined): string
   return (providerId && EMBEDDING_MODELS[providerId]) || null
 }
 
-const BATCH = 100
+// Small batches with a pause between them: embedding quotas are counted per
+// item (Gemini's free tier allows ~100 per minute), so a big burst just
+// collects 429s. On a 429 the same batch waits out the window and retries;
+// after a few in a row the run stops and the next one picks up from there
+// (each finished batch is already stored).
+const BATCH = 50
 // Bounds one run's cost and time; the rest catch up on the next run.
 const MAX_PER_RUN = 3000
+const MAX_CONSECUTIVE_RATE_LIMITS = 4
+
+export type BackfillPacing = { pauseMs: number; rateLimitWaitMs: number }
+const DEFAULT_PACING: BackfillPacing = { pauseMs: 1_000, rateLimitWaitMs: 65_000 }
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+const isRateLimit = (err: unknown) =>
+  err instanceof Error && /\b429\b|rate limit/i.test(err.message)
 
 export async function backfillEmbeddings(
   db: Database,
   provider: RecommendationProvider,
   model: string,
   onProgress?: (done: number, total: number) => void,
+  pacing: BackfillPacing = DEFAULT_PACING,
 ): Promise<{ embedded: number; pending: number }> {
   if (!provider.embed) return { embedded: 0, pending: 0 }
   const [sources, hashes] = await Promise.all([
@@ -198,9 +212,22 @@ export async function backfillEmbeddings(
   }
   const batch = todo.slice(0, MAX_PER_RUN)
   let embedded = 0
-  for (let i = 0; i < batch.length; i += BATCH) {
+  let rateLimited = 0
+  for (let i = 0; i < batch.length; ) {
     const chunk = batch.slice(i, i + BATCH)
-    const vectors = await provider.embed(chunk.map((c) => c.text))
+    let vectors: number[][]
+    try {
+      vectors = await provider.embed(chunk.map((c) => c.text))
+    } catch (err) {
+      if (!isRateLimit(err) || ++rateLimited >= MAX_CONSECUTIVE_RATE_LIMITS) {
+        if (embedded > 0) invalidateEmbeddingIndex()
+        if (isRateLimit(err)) return { embedded, pending: todo.length - embedded }
+        throw err
+      }
+      await sleep(pacing.rateLimitWaitMs)
+      continue
+    }
+    rateLimited = 0
     const rows: EmbeddingRow[] = chunk.map((c, j) => ({
       key: c.key,
       name: c.source.name,
@@ -214,7 +241,9 @@ export async function backfillEmbeddings(
       rows.filter((r) => r.vector.length > 0),
     )
     embedded += rows.length
+    i += BATCH
     onProgress?.(embedded, batch.length)
+    if (i < batch.length) await sleep(pacing.pauseMs)
   }
   if (embedded > 0) invalidateEmbeddingIndex()
   return { embedded, pending: todo.length - batch.length }

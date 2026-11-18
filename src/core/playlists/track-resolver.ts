@@ -97,6 +97,8 @@ async function resolveFromLocal(
       trackName: t.name,
       localPath: t.path,
       plexRatingKey: t.ratingKey,
+      ...(t.partKey ? { plexPartKey: t.partKey } : {}),
+      ...(t.durationMs ? { durationMs: t.durationMs } : {}),
       source: 'local' as const,
     }))
   } catch (error: unknown) {

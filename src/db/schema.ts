@@ -577,6 +577,9 @@ export const playlistTracks = pgTable(
     spotifyUri: text('spotify_uri'),
     deezerId: text('deezer_id'),
     localPath: text('local_path'),
+    // Plex's id for a local track -- joins track_features for the BPM/key
+    // badges and energy arc on the playlist page.
+    ratingKey: text('rating_key'),
     position: integer('position').notNull(),
   },
   (table) => ({
@@ -668,6 +671,23 @@ export const listeningEvents = pgTable(
   }),
 )
 
+// Per-track audio features for DJ-style playlist ordering (core/audio/),
+// keyed by Plex ratingKey. part_key detects a replaced file (re-analyze);
+// error rows remember a failure so a broken file isn't retried every run.
+export const trackFeatures = pgTable('track_features', {
+  ratingKey: text('rating_key').primaryKey(),
+  partKey: text('part_key').notNull(),
+  bpm: real('bpm'),
+  bpmConfidence: real('bpm_confidence'),
+  camelot: text('camelot'),
+  keyName: text('key_name'),
+  keyConfidence: real('key_confidence'),
+  energy: real('energy'),
+  durationMs: integer('duration_ms'),
+  error: text('error'),
+  analyzedAt: timestamp('analyzed_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
 // One vector per artist for semantic similarity ("more like this", the taste
 // map, the semantic score signal) -- see core/embeddings/. Keyed by MBID when
 // known ("mbid:<uuid>"), else by normalized name ("name:<normalized>"), so
@@ -748,6 +768,8 @@ export type PlaylistConfig = {
   genreFilters?: string[]
   decadeFilters?: number[]
   excludeLiveVersions?: boolean
+  // 'shuffle' opts one playlist out of DJ ordering (policy.sequencing).
+  order?: 'dj' | 'shuffle'
   trackSourcePriority: ('local' | 'spotify' | 'deezer')[]
   // for import strategy -- mirrors an exact external playlist into Plex
   // (core/playlists/external-import.ts), re-fetched fresh on each regenerate

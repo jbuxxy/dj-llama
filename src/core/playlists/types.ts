@@ -7,6 +7,9 @@ export type ResolvedTrack = {
   localPath?: string
   /** Plex's id for a 'local' track, from the same server the playlist is pushed to. */
   plexRatingKey?: string
+  /** Plex media part (/library/parts/...), for audio analysis. */
+  plexPartKey?: string
+  durationMs?: number
   source: 'local' | 'spotify' | 'deezer' | 'musicbrainz'
 }
 
@@ -32,6 +35,8 @@ export type LocalTrack = {
   duration?: number
   userRating?: number
   viewCount?: number
+  partKey?: string
+  durationMs?: number
   /** This user's recent skip share for the track (0..1), from listening_events; absent = no data. */
   skipRate?: number
 }
@@ -50,6 +55,10 @@ export type TrackResolverDeps = {
   // track title across every artist, not just one artist's catalog.
   plexTitleSearch?: (query: string) => Promise<LocalTrack[]>
   musicbrainzRecordings?: (artistMbid: string) => Promise<MBRecording[]>
+  // DJ ordering (core/audio + sequence.ts): reorders a finished track list
+  // by key/tempo/energy, analyzing what it can within a time budget. Absent
+  // when Plex isn't connected.
+  sequence?: (tracks: ResolvedTrack[]) => Promise<ResolvedTrack[]>
 }
 
 export type TrackResolverConfig = {

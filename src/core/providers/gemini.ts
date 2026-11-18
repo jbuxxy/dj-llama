@@ -17,7 +17,7 @@ const DEFAULT_TIMEOUT_SECONDS = 60
 const EMBEDDING_MODEL = 'gemini-embedding-001'
 const EMBEDDING_DIMENSIONS = 256
 // batchEmbedContents accepts up to 100 requests per call.
-const EMBED_BATCH = 100
+const EMBED_BATCH = 50
 
 // Gemini's responseSchema is a subset of JSON Schema and rejects fields like
 // `$schema`, `additionalProperties`, `exclusiveMinimum`, etc. Strip the ones

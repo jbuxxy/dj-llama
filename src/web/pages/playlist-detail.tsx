@@ -5,6 +5,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { toast } from 'sonner'
 import { strategyPolicy } from '@/core/playlists/policy'
 import { Hint } from '../components/hint'
+import { EnergyArc, OrderToggle, TrackAudioBadges } from '../components/playlist-energy'
 import { GenerateButton, SweepLiveTracksButton } from '../components/playlist-row-actions'
 import { Skeleton } from '../components/ui/skeleton'
 import {
@@ -95,6 +96,7 @@ function TrackRow({
           {requesting && ` · Requesting ${requesting}`}
         </p>
       </div>
+      <TrackAudioBadges audio={track.audio} />
       <span
         className={`shrink-0 text-micro font-medium px-1.5 py-0.5 rounded ${badge.className}`}
         title={
@@ -276,17 +278,28 @@ export function PlaylistDetailPage() {
       {/* Actions */}
       <PlaylistActions playlist={playlist} onEdit={handleEdit} onRefetch={() => refetch()} />
 
+      {!isImport && <EnergyArc tracks={[...tracks].sort((a, b) => a.position - b.position)} />}
+
       {/* Track listing */}
       <div className="space-y-1">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center justify-between mb-2 gap-2">
           <p className="text-xs text-muted uppercase tracking-wide font-semibold">Tracks</p>
-          {tracks.length > 0 && (
-            <span className="text-xs text-muted">
-              {isImport && missingTracks
-                ? `${tracks.length} total · ${countMissing(tracks, missingByKey)} missing`
-                : `${tracks.length} total`}
-            </span>
-          )}
+          <div className="flex items-center gap-3">
+            {strategyPolicy(playlist.strategy).sequencing === 'dj' && (
+              <OrderToggle
+                playlistId={playlist.id}
+                config={playlist.config}
+                onSaved={() => refetch()}
+              />
+            )}
+            {tracks.length > 0 && (
+              <span className="text-xs text-muted">
+                {isImport && missingTracks
+                  ? `${tracks.length} total · ${countMissing(tracks, missingByKey)} missing`
+                  : `${tracks.length} total`}
+              </span>
+            )}
+          </div>
         </div>
         {tracks.length === 0 ? (
           <div className="py-12 text-center bg-surface border border-border rounded-lg">

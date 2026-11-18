@@ -22,6 +22,11 @@ ARG DJLLAMA_VERSION=""
 ENV DJLLAMA_GIT_SHA=${DJLLAMA_GIT_SHA}
 ENV DJLLAMA_CHANNEL=${DJLLAMA_CHANNEL}
 ENV DJLLAMA_VERSION=${DJLLAMA_VERSION}
+# Audio analysis for DJ-style playlist ordering (core/audio/): ffmpeg decodes
+# a ~45s excerpt of each track, streamed from Plex over HTTP, to raw PCM; BPM,
+# key and energy are computed in-process.
+RUN apk add --no-cache ffmpeg
+
 ENV NODE_ENV=production
 RUN bun run build
 

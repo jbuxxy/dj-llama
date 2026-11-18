@@ -2,6 +2,7 @@ import { serve } from '@hono/node-server'
 import { Cron } from 'croner'
 import { and, eq, isNotNull, isNull, or } from 'drizzle-orm'
 import { canAutoSetup, envConfig } from './config/env'
+import { analyzeInBackground, ensureFeatures } from './core/audio/analyzer'
 import { syncPlexServerUsers } from './core/auth/plex-user-sync'
 import { getPlaylistTracks as getAppleMusicPlaylistTracks } from './core/clients/apple-music'
 import { createDeezerClient } from './core/clients/deezer'
@@ -74,6 +75,7 @@ import { PlaylistScheduler } from './core/playlists/scheduler'
 import { seasonalTrackKey } from './core/playlists/seasonal-generator'
 import { getSeasonalPreset, isWithinSeasonalWindow } from './core/playlists/seasonal-presets'
 import { tickSeasonalPlaylists as runSeasonalTick } from './core/playlists/seasonal-tick'
+import { sequenceTracks } from './core/playlists/sequence'
 import { buildStrategyDeps } from './core/playlists/strategy-deps'
 import type { ResolvedTrack } from './core/playlists/types'
 import { createPlexSource } from './core/plugins/plex'
@@ -141,7 +143,11 @@ import {
   saveLibraryHealthState,
 } from './db/queries/library-health'
 import { getCachedLidarrIds } from './db/queries/lidarr-cache'
-import { getRecentPlays, getTrackSkipStats } from './db/queries/listening-events'
+import {
+  getRecentlyPlayedRatingKeys,
+  getRecentPlays,
+  getTrackSkipStats,
+} from './db/queries/listening-events'
 import { getLearnedWeights } from './db/queries/outcomes'
 import {
   deletePlaylistMissingTrack,
@@ -787,6 +793,21 @@ async function buildPlaylistResolverDeps(userId: number | null) {
         })
       }
       resolverDeps.plexTitleSearch = (query) => plexClient.searchTracksByTitle(query)
+      const plexConn = { plexUrl: conns.plexUrl, token: conns.plexToken }
+      resolverDeps.sequence = async (tracks) => {
+        const analyzable = tracks.flatMap((t) =>
+          t.plexRatingKey && t.plexPartKey
+            ? [{ ratingKey: t.plexRatingKey, partKey: t.plexPartKey, durationMs: t.durationMs }]
+            : [],
+        )
+        const features = await ensureFeatures(db, analyzable, plexConn, {
+          budgetMs: 20_000,
+          max: 30,
+        })
+        return sequenceTracks(tracks, (t) =>
+          t.plexRatingKey ? features.get(t.plexRatingKey) : undefined,
+        )
+      }
     }
   }
 
@@ -2199,6 +2220,7 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
         excludeLiveVersions: cfg.excludeLiveVersions,
         trackSourcePriority,
         mixIndex: cfg.mixIndex,
+        order: cfg.order,
         excludedTracks: cfg.excludedTracks,
         pinnedTracks: cfg.pinnedTracks,
       },
@@ -2224,6 +2246,7 @@ async function generatePlaylistNow(playlistId: number): Promise<void> {
       spotifyUri: track.spotifyUri ?? null,
       deezerId: track.deezerId ?? null,
       localPath: track.localPath ?? null,
+      ratingKey: track.plexRatingKey ?? null,
       position: index,
     }))
 
@@ -2443,6 +2466,32 @@ let stuckDetectorCron: Cron | null = null
 let jobRetentionCron: Cron | null = null
 let listeningBackfillCron: Cron | null = null
 let embeddingBackfillCron: Cron | null = null
+
+// Nightly: analyze (BPM/key/energy) the tracks each Plex user played most
+// recently, so the next generated playlist mostly finds features ready
+// instead of spending its analysis budget. Low priority, bounded per user.
+const AUDIO_CRAWL_PER_USER = 300
+async function crawlAudioFeatures(): Promise<void> {
+  for (const user of await listUsers(db)) {
+    try {
+      const conn = await getUserConnections(db, user.id)
+      if (!conn?.plexUrl || !conn.plexToken) continue
+      const keys = await getRecentlyPlayedRatingKeys(db, user.id, AUDIO_CRAWL_PER_USER)
+      if (keys.length === 0) continue
+      const client = createPlexClient(conn.plexUrl, conn.plexToken, {
+        sectionId: conn.plexSectionId,
+      })
+      const parts = await client.getTrackParts(keys)
+      const analyzed = await analyzeInBackground(db, parts, {
+        plexUrl: conn.plexUrl,
+        token: conn.plexToken,
+      })
+      if (analyzed > 0) console.log(`[audio] user ${user.id}: analyzed ${analyzed} track(s)`)
+    } catch (err) {
+      console.warn(`[audio] crawl for user ${user.id} failed:`, errMsg(err))
+    }
+  }
+}
 
 // Nightly, after the history backfill: label recommendations that stuck (or
 // didn't) and refit each user's learned scoring weights.
@@ -2939,10 +2988,14 @@ const server = serve({ fetch: app.fetch, port })
     setTimeout(() => {
       if (!isMaintenance()) void runEmbeddingBackfill()
     }, 180_000)
+    setTimeout(() => {
+      if (!isMaintenance()) void crawlAudioFeatures()
+    }, 300_000)
     listeningBackfillCron = new Cron('37 4 * * *', async () => {
       if (isMaintenance()) return
       await backfillListeningHistory()
       await updateAllOutcomes()
+      await crawlAudioFeatures()
     })
     // First run soon after boot, so a fresh install has history before the night.
     setTimeout(() => {

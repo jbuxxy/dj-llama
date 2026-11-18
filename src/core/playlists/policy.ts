@@ -43,6 +43,12 @@ export type StrategyPolicy = {
   section: 'daily-mix' | 'curated' | 'seasonal' | 'custom' | 'imported'
   /** Activity Center line while it runs. */
   runningMessage: string
+  /**
+   * Track order: 'dj' sequences analyzed tracks by key, tempo and an energy
+   * arc (core/playlists/sequence.ts); 'source' keeps the source playlist's
+   * order (imports).
+   */
+  sequencing: 'dj' | 'source'
 }
 
 const curated: StrategyPolicy = {
@@ -56,6 +62,7 @@ const curated: StrategyPolicy = {
   reviewExpires: true,
   section: 'curated',
   runningMessage: 'Picking tracks...',
+  sequencing: 'dj',
 }
 
 export const STRATEGY_POLICIES: Record<PlaylistStrategy, StrategyPolicy> = {
@@ -92,6 +99,7 @@ export const STRATEGY_POLICIES: Record<PlaylistStrategy, StrategyPolicy> = {
     generation: 'import',
     section: 'imported',
     runningMessage: 'Importing tracks...',
+    sequencing: 'source',
   },
 }
 

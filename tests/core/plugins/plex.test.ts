@@ -29,6 +29,7 @@ describe('createPlexSource()', () => {
         total: 2,
       }),
       getRecentlyPlayedSince: vi.fn().mockResolvedValue([]),
+      getTrackParts: vi.fn().mockResolvedValue([]),
       getRecentlyAddedAlbums: vi.fn().mockResolvedValue([]),
       getFavoriteTracks: vi.fn().mockResolvedValue([]),
       getServerName: vi.fn().mockResolvedValue(null),

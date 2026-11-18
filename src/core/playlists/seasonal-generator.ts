@@ -28,6 +28,8 @@ export type SeasonalCandidate = {
   trackName: string
   localPath: string
   plexRatingKey?: string
+  plexPartKey?: string
+  durationMs?: number
   reason: SeasonalReason
   score: number
 }
@@ -169,6 +171,8 @@ export async function generateSeasonalTracks(
       trackName: track.name,
       localPath: track.path,
       plexRatingKey: track.ratingKey,
+      ...(track.partKey ? { plexPartKey: track.partKey } : {}),
+      ...(track.durationMs ? { durationMs: track.durationMs } : {}),
       reason,
       score,
     })
@@ -311,6 +315,8 @@ export async function generateSeasonalTracks(
       trackName: c.trackName,
       localPath: c.localPath || undefined,
       plexRatingKey: c.plexRatingKey,
+      ...(c.plexPartKey ? { plexPartKey: c.plexPartKey } : {}),
+      ...(c.durationMs ? { durationMs: c.durationMs } : {}),
       source: 'local' as const,
     })),
     candidates: leftovers,

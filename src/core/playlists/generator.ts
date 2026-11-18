@@ -87,6 +87,7 @@ export async function generatePlaylist(
     excludeLiveVersions?: boolean
     trackSourcePriority: ('local' | 'spotify' | 'deezer')[]
     mixIndex?: number
+    order?: 'dj' | 'shuffle'
     // Seasonal only: user edits that survive regeneration.
     excludedTracks?: SeasonalTrackRef[]
     pinnedTracks?: SeasonalTrackRef[]
@@ -123,7 +124,7 @@ export async function generatePlaylist(
       },
     )
     return {
-      tracks: result.tracks,
+      tracks: await maybeSequence(strategy, config.order, result.tracks, resolverDeps),
       artistCount: new Set(result.tracks.map((t) => t.artistName)).size,
       strategy,
       seasonalCandidates: result.candidates,
@@ -182,7 +183,7 @@ export async function generatePlaylist(
   }
 
   return {
-    tracks,
+    tracks: await maybeSequence(strategy, config.order, tracks, resolverDeps),
     artistCount: artists.length,
     strategy,
     mixTitle:
@@ -194,5 +195,22 @@ export async function generatePlaylist(
     mixDescription: policy.describes
       ? generateMixDescription({ genres: config.genreFilters, decades: config.decadeFilters })
       : undefined,
+  }
+}
+
+async function maybeSequence(
+  strategy: PlaylistStrategy,
+  order: 'dj' | 'shuffle' | undefined,
+  tracks: ResolvedTrack[],
+  resolverDeps: TrackResolverDeps,
+): Promise<ResolvedTrack[]> {
+  if (STRATEGY_POLICIES[strategy].sequencing !== 'dj' || order === 'shuffle') return tracks
+  if (!resolverDeps.sequence) return tracks
+  try {
+    return await resolverDeps.sequence(tracks)
+  } catch (err) {
+    // Ordering is a nicety: a failed analysis never fails the playlist.
+    console.warn('[playlists] DJ ordering skipped:', err instanceof Error ? err.message : err)
+    return tracks
   }
 }

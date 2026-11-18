@@ -128,8 +128,17 @@ describe('getPlaylistWithTracks', () => {
     }
     const trackChain = {
       from: vi.fn().mockReturnThis(),
+      leftJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
-      orderBy: vi.fn().mockResolvedValue(trackRows),
+      orderBy: vi.fn().mockResolvedValue(
+        trackRows.map((track) => ({
+          track,
+          bpm: 120,
+          camelot: '8A',
+          keyName: 'Am',
+          energy: 0.5,
+        })),
+      ),
     }
     const db = {
       select: vi.fn().mockReturnValueOnce(playlistChain).mockReturnValueOnce(trackChain),
@@ -141,6 +150,12 @@ describe('getPlaylistWithTracks', () => {
     expect(result?.playlist.id).toBe(3)
     expect(result?.tracks).toHaveLength(1)
     expect(result?.tracks[0]?.artistName).toBe('Radiohead')
+    expect(result?.tracks[0]?.audio).toEqual({
+      bpm: 120,
+      camelot: '8A',
+      keyName: 'Am',
+      energy: 0.5,
+    })
     expect(trackChain.orderBy).toHaveBeenCalledOnce()
   })
 

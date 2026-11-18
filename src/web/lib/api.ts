@@ -1072,6 +1072,8 @@ export type PlaylistConfig = {
   genreFilters?: string[]
   decadeFilters?: number[]
   excludeLiveVersions?: boolean
+  /** 'shuffle' opts this playlist out of DJ ordering. */
+  order?: 'dj' | 'shuffle'
   trackSourcePriority: ('local' | 'spotify' | 'deezer')[]
   importSource?: 'spotify' | 'deezer' | 'youtube_music' | 'apple_music'
   importPlaylistId?: string
@@ -1131,7 +1133,15 @@ export type PlaylistTrackRow = {
   spotifyUri: string | null
   deezerId: string | null
   localPath: string | null
+  ratingKey?: string | null
   position: number
+  /** Analyzed audio features (DJ ordering); null until the track is analyzed. */
+  audio?: {
+    bpm: number | null
+    camelot: string | null
+    keyName: string | null
+    energy: number | null
+  } | null
 }
 
 export type PlaylistInsert = {

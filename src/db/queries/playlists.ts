@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
 import type { Database } from '@/db'
 import type { PlaylistConfig, PlaylistStrategy } from '@/db/schema'
-import { playlists, playlistTracks, users } from '@/db/schema'
+import { playlists, playlistTracks, trackFeatures, users } from '@/db/schema'
 import type { Cursor } from '@/server/helpers/pagination-cursor'
 
 export type PlaylistInsert = {
@@ -42,6 +42,7 @@ export type PlaylistTrackInsert = {
   spotifyUri?: string | null
   deezerId?: string | null
   localPath?: string | null
+  ratingKey?: string | null
   position: number
 }
 
@@ -118,22 +119,46 @@ export async function getImportedPlaylistsWithOwners(
   return rows.map((r) => ({ ...r.playlist, ownerUsername: r.ownerUsername }))
 }
 
+export type TrackAudio = {
+  bpm: number | null
+  camelot: string | null
+  keyName: string | null
+  energy: number | null
+}
+
+export type PlaylistTrackWithAudio = PlaylistTrackRow & { audio: TrackAudio | null }
+
 export async function getPlaylistWithTracks(
   db: Database,
   playlistId: number,
-): Promise<{ playlist: PlaylistRow; tracks: PlaylistTrackRow[] } | null> {
+): Promise<{ playlist: PlaylistRow; tracks: PlaylistTrackWithAudio[] } | null> {
   const [playlist] = await db.select().from(playlists).where(eq(playlists.id, playlistId))
   if (!playlist) return null
 
-  const tracks = await db
-    .select()
+  // Audio features (DJ ordering, core/audio) ride along for the BPM/key
+  // badges and the energy arc; absent until a track has been analyzed.
+  const rows = await db
+    .select({
+      track: playlistTracks,
+      bpm: trackFeatures.bpm,
+      camelot: trackFeatures.camelot,
+      keyName: trackFeatures.keyName,
+      energy: trackFeatures.energy,
+    })
     .from(playlistTracks)
+    .leftJoin(trackFeatures, eq(trackFeatures.ratingKey, playlistTracks.ratingKey))
     .where(eq(playlistTracks.playlistId, playlistId))
     .orderBy(asc(playlistTracks.position))
 
   return {
     playlist,
-    tracks,
+    tracks: rows.map((r) => ({
+      ...r.track,
+      audio:
+        r.bpm != null || r.camelot != null || r.energy != null
+          ? { bpm: r.bpm, camelot: r.camelot, keyName: r.keyName, energy: r.energy }
+          : null,
+    })),
   }
 }
 
