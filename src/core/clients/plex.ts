@@ -106,6 +106,20 @@ export type PlexLibraryAlbum = {
   primaryType?: 'Album'
 }
 
+export type PlexTrackSonicInfo = {
+  ratingKey: string
+  /** Integrated loudness, LUFS. */
+  loudness: number | null
+  /** Loudness range, LU. */
+  lra: number | null
+  /** "dB seconds;" pairs: level vs. time from the start. */
+  startRamp: string | null
+  /** "dB seconds;" pairs: level vs. time before the end. */
+  endRamp: string | null
+  moods: string[]
+  sonicAnalyzed: boolean
+}
+
 export type PlexOwnedTrack = {
   name: string
   artist: string
@@ -142,6 +156,11 @@ export type PlexClient = {
   getTrackParts: (
     ratingKeys: string[],
   ) => Promise<Array<{ ratingKey: string; partKey: string; durationMs?: number }>>
+  getTrackSonicInfo: (ratingKeys: string[]) => Promise<PlexTrackSonicInfo[]>
+  getSonicNeighbors: (
+    ratingKey: string,
+    opts?: { limit?: number; maxDistance?: number },
+  ) => Promise<Array<{ ratingKey: string; distance: number }>>
   getRecentlyAddedAlbums: (limit?: number) => Promise<PlexRecentlyAddedAlbum[]>
   getFavoriteTracks: (limit?: number) => Promise<PlexFavoriteTrack[]>
   getServerName: () => Promise<string | null>
@@ -507,6 +526,81 @@ export function createPlexClient(
     return out
   }
 
+  // Plex's own analysis data for known tracks: loudness for every track,
+  // intro/outro level ramps (only sent with includeLoudnessRamps), Gracenote
+  // mood tags, and whether sonic analysis has reached the track.
+  async function getTrackSonicInfo(ratingKeys: string[]): Promise<PlexTrackSonicInfo[]> {
+    const out: PlexTrackSonicInfo[] = []
+    for (let i = 0; i < ratingKeys.length; i += 50) {
+      const chunk = ratingKeys
+        .slice(i, i + 50)
+        .map(encodeURIComponent)
+        .join(',')
+      const res = await get<{
+        MediaContainer: {
+          Metadata?: Array<{
+            ratingKey: string
+            type?: string
+            musicAnalysisVersion?: string | number
+            Mood?: Array<{ tag?: string }>
+            Media?: Array<{
+              Part?: Array<{
+                Stream?: Array<{
+                  streamType?: number
+                  loudness?: string | number
+                  lra?: string | number
+                  startRamp?: string
+                  endRamp?: string
+                }>
+              }>
+            }>
+          }>
+        }
+      }>(`/library/metadata/${chunk}?includeLoudnessRamps=1`)
+      for (const m of res.MediaContainer.Metadata ?? []) {
+        if (m.type !== 'track') continue
+        const streams = m.Media?.[0]?.Part?.[0]?.Stream ?? []
+        const audio = streams.find((s) => s.streamType === 2) ?? streams[0]
+        const num = (v: string | number | undefined) => {
+          const n = typeof v === 'number' ? v : v != null ? Number.parseFloat(v) : Number.NaN
+          return Number.isFinite(n) ? n : null
+        }
+        out.push({
+          ratingKey: m.ratingKey,
+          loudness: num(audio?.loudness),
+          lra: num(audio?.lra),
+          startRamp: audio?.startRamp ?? null,
+          endRamp: audio?.endRamp ?? null,
+          moods: (m.Mood ?? []).flatMap((x) => (x.tag ? [x.tag] : [])),
+          sonicAnalyzed: m.musicAnalysisVersion != null && `${m.musicAnalysisVersion}` !== '0',
+        })
+      }
+    }
+    return out
+  }
+
+  // Sonically similar tracks (Plex Pass sonic analysis), nearest first. Plex
+  // returns nothing until the library's sonic analysis is far enough along,
+  // so an empty list is normal, not an error.
+  async function getSonicNeighbors(
+    ratingKey: string,
+    opts: { limit?: number; maxDistance?: number } = {},
+  ): Promise<Array<{ ratingKey: string; distance: number }>> {
+    const params = new URLSearchParams({
+      limit: String(opts.limit ?? 100),
+      maxDistance: String(opts.maxDistance ?? 0.5),
+    })
+    const res = await get<{
+      MediaContainer?: { Metadata?: Array<{ ratingKey: string; distance?: string | number }> }
+    }>(`/library/metadata/${encodeURIComponent(ratingKey)}/nearest?${params}`)
+    return (res.MediaContainer?.Metadata ?? []).flatMap((m) => {
+      const d = typeof m.distance === 'number' ? m.distance : Number.parseFloat(m.distance ?? '')
+      return m.ratingKey && Number.isFinite(d)
+        ? [{ ratingKey: String(m.ratingKey), distance: d }]
+        : []
+    })
+  }
+
   // Library-wide track search by title -- Plex's `title` filter on a track
   // (type=10) listing is a case-insensitive substring match, so "ghost"
   // also returns "Ghost Town" and "Ghostbusters". Callers do their own
@@ -660,6 +754,8 @@ export function createPlexClient(
     getRecentlyPlayed,
     getRecentlyPlayedSince,
     getTrackParts,
+    getTrackSonicInfo,
+    getSonicNeighbors,
     getRecentlyAddedAlbums,
     getFavoriteTracks,
     getServerName,

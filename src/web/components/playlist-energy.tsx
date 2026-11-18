@@ -4,8 +4,8 @@ import { type PlaylistConfig, type PlaylistTrackRow, updatePlaylistApi } from '.
 import { cn } from '../lib/utils'
 
 // The playlist's energy, track by track -- one column per track in play
-// order, so a DJ-ordered list reads as warm-up, peak, cool-down. Tracks not
-// analyzed yet are a short muted stub rather than a gap.
+// order, so a DJ-ordered list reads as warm-up, peak, cool-down. Tracks
+// with no energy data yet are a short muted stub rather than a gap.
 export function EnergyArc({ tracks }: { tracks: PlaylistTrackRow[] }) {
   const [hover, setHover] = useState<number | null>(null)
   const analyzed = tracks.filter((t) => t.audio?.energy != null).length
@@ -23,8 +23,8 @@ export function EnergyArc({ tracks }: { tracks: PlaylistTrackRow[] }) {
                   : ''
               }${active.audio?.bpm ? ` · ${Math.round(active.audio.bpm)} BPM` : ''}${
                 active.audio?.camelot ? ` · ${active.audio.camelot}` : ''
-              }`
-            : `${analyzed} of ${tracks.length} tracks analyzed`}
+              }${active.audio?.moods?.length ? ` · ${active.audio.moods.join(', ')}` : ''}`
+            : `Energy for ${analyzed} of ${tracks.length} tracks`}
         </p>
       </div>
       <div className="flex items-end gap-[2px] h-12">
@@ -39,7 +39,7 @@ export function EnergyArc({ tracks }: { tracks: PlaylistTrackRow[] }) {
               onMouseLeave={() => setHover(null)}
               onFocus={() => setHover(i)}
               onBlur={() => setHover(null)}
-              aria-label={`Track ${i + 1}: ${e != null ? `energy ${Math.round(e * 100)}` : 'not analyzed'}`}
+              aria-label={`Track ${i + 1}: ${e != null ? `energy ${Math.round(e * 100)}` : 'no energy data yet'}`}
             >
               <span
                 className={cn(

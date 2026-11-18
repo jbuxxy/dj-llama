@@ -3,6 +3,12 @@ import { Cron } from 'croner'
 import { and, eq, isNotNull, isNull, or } from 'drizzle-orm'
 import { canAutoSetup, envConfig } from './config/env'
 import { analyzeInBackground, ensureFeatures } from './core/audio/analyzer'
+import {
+  refreshPlexSonic,
+  SONIC_MAX_DISTANCE,
+  sequenceFeaturesFor,
+  sonicDistances,
+} from './core/audio/plex-sonic'
 import { syncPlexServerUsers } from './core/auth/plex-user-sync'
 import { getPlaylistTracks as getAppleMusicPlaylistTracks } from './core/clients/apple-music'
 import { createDeezerClient } from './core/clients/deezer'
@@ -143,11 +149,7 @@ import {
   saveLibraryHealthState,
 } from './db/queries/library-health'
 import { getCachedLidarrIds } from './db/queries/lidarr-cache'
-import {
-  getRecentlyPlayedRatingKeys,
-  getRecentPlays,
-  getTrackSkipStats,
-} from './db/queries/listening-events'
+import { getRecentPlays, getTrackSkipStats } from './db/queries/listening-events'
 import { getLearnedWeights } from './db/queries/outcomes'
 import {
   deletePlaylistMissingTrack,
@@ -162,6 +164,7 @@ import {
   getEnabledPlaylists,
   getExpiredReviewPlaylists,
   getImportedPlaylistsWithOwners,
+  getPlaylistRatingKeys,
   getPlaylistsByUser,
   getPlaylistWithTracks,
   type PlaylistRow,
@@ -198,6 +201,7 @@ import {
   setCachedTrackAlbumResolution,
   trackAlbumCacheKey,
 } from './db/queries/track-album-resolution-cache'
+import { getTrackFeatures } from './db/queries/track-features'
 import {
   createUser,
   deleteUser,
@@ -794,18 +798,43 @@ async function buildPlaylistResolverDeps(userId: number | null) {
       }
       resolverDeps.plexTitleSearch = (query) => plexClient.searchTracksByTitle(query)
       const plexConn = { plexUrl: conns.plexUrl, token: conns.plexToken }
+      // DJ order: our BPM/key analysis (budgeted; the rest fills in nightly)
+      // alongside Plex's own analysis -- loudness/moods/ramps for every
+      // track, and sonic neighbors for tracks Plex's sonic analysis has
+      // reached (picked up automatically as it progresses).
       resolverDeps.sequence = async (tracks) => {
+        const keys = tracks.flatMap((t) => (t.plexRatingKey ? [t.plexRatingKey] : []))
         const analyzable = tracks.flatMap((t) =>
           t.plexRatingKey && t.plexPartKey
             ? [{ ratingKey: t.plexRatingKey, partKey: t.plexPartKey, durationMs: t.durationMs }]
             : [],
         )
-        const features = await ensureFeatures(db, analyzable, plexConn, {
-          budgetMs: 20_000,
-          max: 30,
-        })
-        return sequenceTracks(tracks, (t) =>
-          t.plexRatingKey ? features.get(t.plexRatingKey) : undefined,
+        const [features, [sonic, distance]] = await Promise.all([
+          ensureFeatures(db, analyzable, plexConn, { budgetMs: 20_000, max: 30 }),
+          refreshPlexSonic(db, plexClient, keys).then(async (sonic) => {
+            const analyzed = keys.filter((k) => sonic.get(k)?.sonicAnalyzed)
+            const distance =
+              analyzed.length >= 3
+                ? await sonicDistances(plexClient, analyzed, { budgetMs: 10_000 })
+                : undefined
+            return [sonic, distance] as const
+          }),
+        ])
+        return sequenceTracks(
+          tracks,
+          (t) =>
+            t.plexRatingKey
+              ? sequenceFeaturesFor(features.get(t.plexRatingKey), sonic.get(t.plexRatingKey))
+              : undefined,
+          {
+            sonicDistance: distance
+              ? (a, b) =>
+                  a.plexRatingKey && b.plexRatingKey
+                    ? distance(a.plexRatingKey, b.plexRatingKey)
+                    : undefined
+              : undefined,
+            sonicMaxDistance: SONIC_MAX_DISTANCE,
+          },
         )
       }
     }
@@ -2467,20 +2496,37 @@ let jobRetentionCron: Cron | null = null
 let listeningBackfillCron: Cron | null = null
 let embeddingBackfillCron: Cron | null = null
 
-// Nightly: analyze (BPM/key/energy) the tracks each Plex user played most
-// recently, so the next generated playlist mostly finds features ready
-// instead of spending its analysis budget. Low priority, bounded per user.
+// Nightly, for the tracks in each user's playlists: refresh Plex's analysis
+// data (cheap metadata -- also how sonic analysis progress gets noticed),
+// then run our BPM/key analysis on the ones still missing it. Only playlist
+// tracks: that's where DJ order is used. Low priority, bounded per user.
 const AUDIO_CRAWL_PER_USER = 300
+const PLEX_SONIC_PER_USER = 3000
 async function crawlAudioFeatures(): Promise<void> {
   for (const user of await listUsers(db)) {
     try {
       const conn = await getUserConnections(db, user.id)
       if (!conn?.plexUrl || !conn.plexToken) continue
-      const keys = await getRecentlyPlayedRatingKeys(db, user.id, AUDIO_CRAWL_PER_USER)
-      if (keys.length === 0) continue
+      const playlistKeys = await getPlaylistRatingKeys(db, user.id, PLEX_SONIC_PER_USER)
+      if (playlistKeys.length === 0) continue
       const client = createPlexClient(conn.plexUrl, conn.plexToken, {
         sectionId: conn.plexSectionId,
       })
+      const sonic = await refreshPlexSonic(db, client, playlistKeys)
+      const covered = [...sonic.values()].filter((r) => r.sonicAnalyzed).length
+      console.log(
+        `[audio] user ${user.id}: Plex data for ${sonic.size}/${playlistKeys.length} playlist track(s), ${covered} sonically analyzed`,
+      )
+      // Pick the playlist tracks still lacking BPM/key (analyzeInBackground
+      // re-checks the details, e.g. a changed file or an old error).
+      const known = await getTrackFeatures(db, playlistKeys)
+      const keys = playlistKeys
+        .filter((k) => {
+          const row = known.get(k)
+          return !row || row.error != null
+        })
+        .slice(0, AUDIO_CRAWL_PER_USER)
+      if (keys.length === 0) continue
       const parts = await client.getTrackParts(keys)
       const analyzed = await analyzeInBackground(db, parts, {
         plexUrl: conn.plexUrl,

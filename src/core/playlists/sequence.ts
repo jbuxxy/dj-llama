@@ -3,22 +3,50 @@
 // arc -- ease in, peak around two thirds through, come down at the end --
 // while keeping one artist from playing back to back.
 //
+// Plex's analysis adds smoother joins: no big loudness jumps between
+// neighbors, no long fade-out straight into a slow build, and -- once Plex's
+// sonic analysis has reached the tracks -- neighbors that sound alike.
+//
 // Beam search over the tracks that have analyzed features; tracks without
 // features stay exactly where the shuffle put them, so a partly analyzed
 // playlist is still a good shuffle plus a sequenced backbone.
 
-export type SequenceFeatures = { bpm: number | null; camelot: string | null; energy: number | null }
+export type SequenceFeatures = {
+  bpm: number | null
+  camelot: string | null
+  energy: number | null
+  /** Integrated loudness, LUFS (Plex). */
+  loudness?: number | null
+  /** Seconds until the track reaches its normal level (Plex). */
+  introSec?: number | null
+  /** Seconds of fade at the end (Plex). */
+  outroSec?: number | null
+}
 
-export type SequenceOptions = {
+export type SequenceOptions<T = unknown> = {
   /** Position of the energy peak, 0..1. */
   peakAt?: number
   beamWidth?: number
+  /**
+   * Sonic distance between two tracks, 0 = alike; undefined when unknown or
+   * not alike. When given, alike neighbors are preferred.
+   */
+  sonicDistance?: (a: T, b: T) => number | undefined
+  /** Distance treated as "not alike at all" (normalizes sonicDistance). */
+  sonicMaxDistance?: number
 }
 
 const KEY_WEIGHT = 1
 const BPM_WEIGHT = 1
 const ENERGY_WEIGHT = 1.5
 const SAME_ARTIST_PENALTY = 1.2
+const LOUDNESS_WEIGHT = 0.6
+const SONIC_WEIGHT = 1
+const SAG_PENALTY = 0.3
+// Loudness steps under this many LU go unnoticed.
+const LOUDNESS_SLACK = 3
+// A fade-out this long into an intro this long sags in the middle.
+const LONG_RAMP_SEC = 5
 const MIN_SEQUENCED = 3
 
 type Parsed = { n: number; mode: 'A' | 'B' }
@@ -55,12 +83,12 @@ export function energyArc(t: number, peakAt = 0.65): number {
 export function sequenceTracks<T extends { artistName: string }>(
   tracks: T[],
   featuresOf: (track: T) => SequenceFeatures | null | undefined,
-  opts: SequenceOptions = {},
+  opts: SequenceOptions<T> = {},
 ): T[] {
   const featured: Array<{ track: T; f: SequenceFeatures; slot: number }> = []
   tracks.forEach((track, slot) => {
     const f = featuresOf(track)
-    if (f && (f.bpm != null || f.camelot != null || f.energy != null))
+    if (f && (f.bpm != null || f.camelot != null || f.energy != null || f.loudness != null))
       featured.push({ track, f, slot })
   })
   if (featured.length < MIN_SEQUENCED) return tracks
@@ -76,18 +104,29 @@ export function sequenceTracks<T extends { artistName: string }>(
     const e = featured[i]?.f.energy
     return e == null ? 0.3 : (Math.abs(e - target(pos)) / span) * ENERGY_WEIGHT
   }
+  const sonicMax = opts.sonicMaxDistance ?? 0.6
+  const sonicOf = opts.sonicDistance
   const stepCost = (a: number, b: number, pos: number) => {
-    const fa = (featured[a] as (typeof featured)[number]).f
-    const fb = (featured[b] as (typeof featured)[number]).f
-    const sameArtist =
-      (featured[a] as (typeof featured)[number]).track.artistName.toLowerCase() ===
-      (featured[b] as (typeof featured)[number]).track.artistName.toLowerCase()
-    return (
+    const xa = featured[a] as (typeof featured)[number]
+    const xb = featured[b] as (typeof featured)[number]
+    const fa = xa.f
+    const fb = xb.f
+    const sameArtist = xa.track.artistName.toLowerCase() === xb.track.artistName.toLowerCase()
+    let cost =
       KEY_WEIGHT * camelotDistance(fa.camelot, fb.camelot) +
       BPM_WEIGHT * bpmDistance(fa.bpm, fb.bpm) * 8 +
       placeCost(b, pos) +
       (sameArtist ? SAME_ARTIST_PENALTY : 0)
-    )
+    if (fa.loudness != null && fb.loudness != null)
+      cost +=
+        (LOUDNESS_WEIGHT * Math.max(0, Math.abs(fa.loudness - fb.loudness) - LOUDNESS_SLACK)) / 6
+    if ((fa.outroSec ?? 0) >= LONG_RAMP_SEC && (fb.introSec ?? 0) >= LONG_RAMP_SEC)
+      cost += SAG_PENALTY
+    if (sonicOf) {
+      const d = sonicOf(xa.track, xb.track)
+      cost += SONIC_WEIGHT * (d == null ? 1 : Math.min(1, d / sonicMax))
+    }
+    return cost
   }
 
   type Beam = { order: number[]; used: Set<number>; cost: number }

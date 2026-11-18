@@ -1,7 +1,8 @@
-import { and, asc, desc, eq, isNotNull, isNull, lt, ne, or } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, isNull, lt, ne, or, sql } from 'drizzle-orm'
+import { sequenceFeaturesFor } from '@/core/audio/plex-sonic'
 import type { Database } from '@/db'
 import type { PlaylistConfig, PlaylistStrategy } from '@/db/schema'
-import { playlists, playlistTracks, trackFeatures, users } from '@/db/schema'
+import { playlists, playlistTracks, plexTrackSonic, trackFeatures, users } from '@/db/schema'
 import type { Cursor } from '@/server/helpers/pagination-cursor'
 
 export type PlaylistInsert = {
@@ -124,6 +125,8 @@ export type TrackAudio = {
   camelot: string | null
   keyName: string | null
   energy: number | null
+  /** Gracenote mood tags from Plex. */
+  moods?: string[]
 }
 
 export type PlaylistTrackWithAudio = PlaylistTrackRow & { audio: TrackAudio | null }
@@ -136,29 +139,36 @@ export async function getPlaylistWithTracks(
   if (!playlist) return null
 
   // Audio features (DJ ordering, core/audio) ride along for the BPM/key
-  // badges and the energy arc; absent until a track has been analyzed.
+  // badges and the energy arc: our analysis for BPM/key, energy blended with
+  // Plex's loudness/mood data (which covers tracks we haven't analyzed).
   const rows = await db
     .select({
       track: playlistTracks,
-      bpm: trackFeatures.bpm,
-      camelot: trackFeatures.camelot,
-      keyName: trackFeatures.keyName,
-      energy: trackFeatures.energy,
+      features: trackFeatures,
+      sonic: plexTrackSonic,
     })
     .from(playlistTracks)
     .leftJoin(trackFeatures, eq(trackFeatures.ratingKey, playlistTracks.ratingKey))
+    .leftJoin(plexTrackSonic, eq(plexTrackSonic.ratingKey, playlistTracks.ratingKey))
     .where(eq(playlistTracks.playlistId, playlistId))
     .orderBy(asc(playlistTracks.position))
 
   return {
     playlist,
-    tracks: rows.map((r) => ({
-      ...r.track,
-      audio:
-        r.bpm != null || r.camelot != null || r.energy != null
-          ? { bpm: r.bpm, camelot: r.camelot, keyName: r.keyName, energy: r.energy }
-          : null,
-    })),
+    tracks: rows.map((r) => {
+      const f = sequenceFeaturesFor(r.features ?? undefined, r.sonic ?? undefined)
+      const audio =
+        f && (f.bpm != null || f.camelot != null || f.energy != null)
+          ? {
+              bpm: f.bpm,
+              camelot: f.camelot,
+              keyName: r.features?.keyName ?? null,
+              energy: f.energy,
+              moods: r.sonic?.moods.slice(0, 3) ?? [],
+            }
+          : null
+      return { ...r.track, audio }
+    }),
   }
 }
 
@@ -230,4 +240,24 @@ export async function getPlaylistsDueForGeneration(db: Database): Promise<Playli
       ),
     )
   return rows
+}
+
+/** Distinct Plex ratingKeys across a user's playlists, most recently generated first. */
+export async function getPlaylistRatingKeys(
+  db: Database,
+  userId: number,
+  limit: number,
+): Promise<string[]> {
+  const rows = await db
+    .select({ ratingKey: playlistTracks.ratingKey, at: playlists.lastGeneratedAt })
+    .from(playlistTracks)
+    .innerJoin(playlists, eq(playlists.id, playlistTracks.playlistId))
+    .where(and(eq(playlists.userId, userId), isNotNull(playlistTracks.ratingKey)))
+    .orderBy(sql`${playlists.lastGeneratedAt} desc nulls last`, asc(playlistTracks.position))
+  const out = new Set<string>()
+  for (const r of rows) {
+    if (r.ratingKey) out.add(r.ratingKey)
+    if (out.size >= limit) break
+  }
+  return [...out]
 }

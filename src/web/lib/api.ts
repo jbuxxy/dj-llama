@@ -1135,12 +1135,17 @@ export type PlaylistTrackRow = {
   localPath: string | null
   ratingKey?: string | null
   position: number
-  /** Analyzed audio features (DJ ordering); null until the track is analyzed. */
+  /**
+   * Audio features for DJ ordering: BPM/key from our analysis, energy from
+   * it and/or Plex's loudness + mood data. Null when neither has the track.
+   */
   audio?: {
     bpm: number | null
     camelot: string | null
     keyName: string | null
     energy: number | null
+    /** Up to three Plex (Gracenote) mood tags. */
+    moods?: string[]
   } | null
 }
 

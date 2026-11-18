@@ -688,6 +688,24 @@ export const trackFeatures = pgTable('track_features', {
   analyzedAt: timestamp('analyzed_at', { withTimezone: true }).defaultNow().notNull(),
 })
 
+// What Plex's own music analysis knows about a track (core/audio/plex-sonic.ts):
+// loudness (EBU R128 integrated loudness + range) for every track, the
+// intro/outro level ramps, and Gracenote mood tags. Cheap metadata reads --
+// no audio download -- so it covers whole playlists immediately, where
+// track_features (our BPM/key analysis) fills in over time. sonic_analyzed
+// tracks are the ones Plex's sonic analysis has reached; only those have
+// sonic neighbors.
+export const plexTrackSonic = pgTable('plex_track_sonic', {
+  ratingKey: text('rating_key').primaryKey(),
+  loudness: real('loudness'),
+  lra: real('lra'),
+  introSec: real('intro_sec'),
+  outroSec: real('outro_sec'),
+  moods: text('moods').array().notNull().default(sql`'{}'::text[]`),
+  sonicAnalyzed: boolean('sonic_analyzed').notNull().default(false),
+  fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
+})
+
 // One vector per artist for semantic similarity ("more like this", the taste
 // map, the semantic score signal) -- see core/embeddings/. Keyed by MBID when
 // known ("mbid:<uuid>"), else by normalized name ("name:<normalized>"), so

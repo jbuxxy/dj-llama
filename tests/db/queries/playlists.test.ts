@@ -130,15 +130,19 @@ describe('getPlaylistWithTracks', () => {
       from: vi.fn().mockReturnThis(),
       leftJoin: vi.fn().mockReturnThis(),
       where: vi.fn().mockReturnThis(),
-      orderBy: vi.fn().mockResolvedValue(
-        trackRows.map((track) => ({
+      orderBy: vi.fn().mockResolvedValue([
+        ...trackRows.map((track) => ({
           track,
-          bpm: 120,
-          camelot: '8A',
-          keyName: 'Am',
-          energy: 0.5,
+          features: { bpm: 120, camelot: '8A', keyName: 'Am', energy: 0.5 },
+          sonic: null,
         })),
-      ),
+        // Only Plex's data: energy from loudness, no BPM/key.
+        {
+          track: { ...trackRows[0], id: 2, position: 1 },
+          features: null,
+          sonic: { loudness: -8, lra: 5, moods: ['Lively', 'Rousing', 'Fun', 'Warm'] },
+        },
+      ]),
     }
     const db = {
       select: vi.fn().mockReturnValueOnce(playlistChain).mockReturnValueOnce(trackChain),
@@ -148,14 +152,19 @@ describe('getPlaylistWithTracks', () => {
 
     expect(result).not.toBeNull()
     expect(result?.playlist.id).toBe(3)
-    expect(result?.tracks).toHaveLength(1)
+    expect(result?.tracks).toHaveLength(2)
     expect(result?.tracks[0]?.artistName).toBe('Radiohead')
     expect(result?.tracks[0]?.audio).toEqual({
       bpm: 120,
       camelot: '8A',
       keyName: 'Am',
       energy: 0.5,
+      moods: [],
     })
+    const plexOnly = result?.tracks[1]?.audio
+    expect(plexOnly?.bpm).toBeNull()
+    expect(plexOnly?.energy).toBeGreaterThan(0.5)
+    expect(plexOnly?.moods).toEqual(['Lively', 'Rousing', 'Fun'])
     expect(trackChain.orderBy).toHaveBeenCalledOnce()
   })
 
