@@ -1146,6 +1146,8 @@ export type PlaylistTrackRow = {
     energy: number | null
     /** Up to three Plex (Gracenote) mood tags. */
     moods?: string[]
+    /** Plex reports no vocals. */
+    instrumental?: boolean
   } | null
 }
 

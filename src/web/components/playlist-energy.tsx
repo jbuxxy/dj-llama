@@ -58,7 +58,7 @@ export function EnergyArc({ tracks }: { tracks: PlaylistTrackRow[] }) {
 }
 
 export function TrackAudioBadges({ audio }: { audio: PlaylistTrackRow['audio'] }) {
-  if (!audio || (audio.bpm == null && !audio.camelot)) return null
+  if (!audio || (audio.bpm == null && !audio.camelot && !audio.instrumental)) return null
   return (
     <span className="hidden sm:flex shrink-0 items-center gap-1.5 text-micro text-muted tabular-nums">
       {audio.bpm != null && <span title="Tempo">{Math.round(audio.bpm)} BPM</span>}
@@ -70,6 +70,7 @@ export function TrackAudioBadges({ audio }: { audio: PlaylistTrackRow['audio'] }
           {audio.camelot}
         </span>
       )}
+      {audio.instrumental && <span title="No vocals (Plex analysis)">Instr.</span>}
     </span>
   )
 }

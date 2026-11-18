@@ -118,6 +118,13 @@ export type PlexTrackSonicInfo = {
   endRamp: string | null
   moods: string[]
   sonicAnalyzed: boolean
+  /** Plex's voice-activity flag, as reported (see plex-sonic.ts for when it's trusted). */
+  hasVoiceActivity: boolean | null
+  /** Tempo / musical key, if Plex provides them (not exposed as of PMS 1.43). */
+  bpm: number | null
+  musicalKey: string | null
+  /** Fields on the track/media/stream this client doesn't know yet -- logged so new Plex data gets noticed. */
+  unknownFields: string[]
 }
 
 export type PlexOwnedTrack = {
@@ -166,6 +173,24 @@ export type PlexClient = {
   getServerName: () => Promise<string | null>
   testConnection: () => Promise<ServiceTestResult>
 }
+
+// Fields Plex sends on a track today (PMS 1.43); anything else is reported
+// by getTrackSonicInfo so new analysis output (tempo, key...) gets noticed.
+const KNOWN_TRACK_FIELDS = new Set(
+  'ratingKey,key,parentRatingKey,grandparentRatingKey,guid,parentGuid,grandparentGuid,parentStudio,type,title,titleSort,grandparentKey,parentKey,librarySectionTitle,librarySectionID,librarySectionKey,grandparentTitle,parentTitle,originalTitle,summary,index,parentIndex,ratingCount,parentYear,year,thumb,art,parentThumb,grandparentThumb,grandparentArt,duration,addedAt,updatedAt,lastViewedAt,lastRatedAt,viewCount,skipCount,userRating,musicAnalysisVersion,Media,Image,Guid,Mood,Genre,Style,Field,Collection,Label,UltraBlurColors,chapterSource,viewOffset,distance,source,playlistItemID,librarySectionUUID,parentTheme,grandparentTheme,hasPremiumLyrics,hasPremiumExtras'.split(
+    ',',
+  ),
+)
+const KNOWN_MEDIA_FIELDS = new Set(
+  'id,duration,bitrate,audioChannels,audioCodec,container,hasVoiceActivity,Part,optimizedForStreaming,audioProfile,has64bitOffsets,selected'.split(
+    ',',
+  ),
+)
+const KNOWN_STREAM_FIELDS = new Set(
+  'id,streamType,canNormalizeLoudness,selected,codec,index,channels,bitrate,albumGain,albumPeak,albumRange,audioChannelLayout,endRamp,gain,loudness,lra,peak,samplingRate,startRamp,displayTitle,extendedDisplayTitle,bitDepth,profile,default,language,languageCode,languageTag,title'.split(
+    ',',
+  ),
+)
 
 export function createPlexClient(
   url: string,
@@ -530,49 +555,75 @@ export function createPlexClient(
   // intro/outro level ramps (only sent with includeLoudnessRamps), Gracenote
   // mood tags, and whether sonic analysis has reached the track.
   async function getTrackSonicInfo(ratingKeys: string[]): Promise<PlexTrackSonicInfo[]> {
+    type Obj = Record<string, unknown>
     const out: PlexTrackSonicInfo[] = []
     for (let i = 0; i < ratingKeys.length; i += 50) {
       const chunk = ratingKeys
         .slice(i, i + 50)
         .map(encodeURIComponent)
         .join(',')
-      const res = await get<{
-        MediaContainer: {
-          Metadata?: Array<{
-            ratingKey: string
-            type?: string
-            musicAnalysisVersion?: string | number
-            Mood?: Array<{ tag?: string }>
-            Media?: Array<{
-              Part?: Array<{
-                Stream?: Array<{
-                  streamType?: number
-                  loudness?: string | number
-                  lra?: string | number
-                  startRamp?: string
-                  endRamp?: string
-                }>
-              }>
-            }>
-          }>
-        }
-      }>(`/library/metadata/${chunk}?includeLoudnessRamps=1`)
+      const res = await get<{ MediaContainer: { Metadata?: Obj[] } }>(
+        `/library/metadata/${chunk}?includeLoudnessRamps=1`,
+      )
       for (const m of res.MediaContainer.Metadata ?? []) {
         if (m.type !== 'track') continue
-        const streams = m.Media?.[0]?.Part?.[0]?.Stream ?? []
-        const audio = streams.find((s) => s.streamType === 2) ?? streams[0]
-        const num = (v: string | number | undefined) => {
-          const n = typeof v === 'number' ? v : v != null ? Number.parseFloat(v) : Number.NaN
+        const media = ((m.Media as Obj[] | undefined) ?? [])[0] ?? {}
+        const part = ((media.Part as Obj[] | undefined) ?? [])[0] ?? {}
+        const streams = (part.Stream as Obj[] | undefined) ?? []
+        const audio = streams.find((x) => x.streamType === 2) ?? streams[0] ?? {}
+        const num = (v: unknown) => {
+          const n =
+            typeof v === 'number' ? v : typeof v === 'string' ? Number.parseFloat(v) : Number.NaN
           return Number.isFinite(n) ? n : null
         }
+        const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : null)
+        const first = <T>(read: (v: unknown) => T | null, ...vals: unknown[]) => {
+          for (const v of vals) {
+            const r = read(v)
+            if (r != null) return r
+          }
+          return null
+        }
+        const unknownFields = [
+          ...Object.keys(m)
+            .filter((k) => !KNOWN_TRACK_FIELDS.has(k))
+            .map((k) => `track.${k}`),
+          ...Object.keys(media)
+            .filter((k) => !KNOWN_MEDIA_FIELDS.has(k))
+            .map((k) => `media.${k}`),
+          ...Object.keys(audio)
+            .filter((k) => !KNOWN_STREAM_FIELDS.has(k))
+            .map((k) => `stream.${k}`),
+        ]
+        const voice = media.hasVoiceActivity
         out.push({
-          ratingKey: m.ratingKey,
-          loudness: num(audio?.loudness),
-          lra: num(audio?.lra),
-          startRamp: audio?.startRamp ?? null,
-          endRamp: audio?.endRamp ?? null,
-          moods: (m.Mood ?? []).flatMap((x) => (x.tag ? [x.tag] : [])),
+          ratingKey: String(m.ratingKey),
+          loudness: num(audio.loudness),
+          lra: num(audio.lra),
+          startRamp: str(audio.startRamp),
+          endRamp: str(audio.endRamp),
+          moods: ((m.Mood as Obj[] | undefined) ?? []).flatMap((x) =>
+            typeof x.tag === 'string' ? [x.tag] : [],
+          ),
           sonicAnalyzed: m.musicAnalysisVersion != null && `${m.musicAnalysisVersion}` !== '0',
+          hasVoiceActivity:
+            typeof voice === 'boolean'
+              ? voice
+              : voice === 1 || voice === '1'
+                ? true
+                : voice === 0 || voice === '0'
+                  ? false
+                  : null,
+          // Field names Plex might use if/when it exposes tempo and key.
+          bpm: first(num, m.bpm, m.tempo, audio.bpm, audio.tempo),
+          musicalKey: first(
+            str,
+            m.musicalKey,
+            audio.musicalKey,
+            m.keySignature,
+            audio.keySignature,
+          ),
+          unknownFields,
         })
       }
     }

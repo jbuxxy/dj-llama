@@ -160,6 +160,7 @@ describe('getPlaylistWithTracks', () => {
       keyName: 'Am',
       energy: 0.5,
       moods: [],
+      instrumental: false,
     })
     const plexOnly = result?.tracks[1]?.audio
     expect(plexOnly?.bpm).toBeNull()
@@ -232,7 +233,7 @@ describe('replacePlaylistTracks', () => {
 
     const tracks: PlaylistTrackInsert[] = [
       { playlistId: 1, artistName: 'Portishead', position: 0 },
-      { playlistId: 1, artistName: 'Massive Attack', position: 1 },
+      { playlistId: 1, artistName: 'Massive Attack', position: 1, ratingKey: '4242' },
     ]
     await replacePlaylistTracks(db, 1, tracks)
 
@@ -241,8 +242,11 @@ describe('replacePlaylistTracks', () => {
     expect(txMock.insert).toHaveBeenCalledOnce()
     expect(insertChain.values).toHaveBeenCalledOnce()
     // biome-ignore lint/style/noNonNullAssertion: mock call args
-    const insertedRows = insertChain.values.mock.calls[0]![0] as unknown[]
+    const insertedRows = insertChain.values.mock.calls[0]![0] as Array<{ ratingKey: unknown }>
     expect(insertedRows).toHaveLength(2)
+    // The Plex track id must survive: audio features and the crawl join on it.
+    expect(insertedRows[0]?.ratingKey).toBeNull()
+    expect(insertedRows[1]?.ratingKey).toBe('4242')
   })
 
   it('skips insert when tracks array is empty', async () => {

@@ -127,6 +127,8 @@ export type TrackAudio = {
   energy: number | null
   /** Gracenote mood tags from Plex. */
   moods?: string[]
+  /** Plex says no vocals (only once Plex's voice flag is live). */
+  instrumental?: boolean
 }
 
 export type PlaylistTrackWithAudio = PlaylistTrackRow & { audio: TrackAudio | null }
@@ -165,6 +167,7 @@ export async function getPlaylistWithTracks(
               keyName: r.features?.keyName ?? null,
               energy: f.energy,
               moods: r.sonic?.moods.slice(0, 3) ?? [],
+              instrumental: r.sonic?.hasVocals === false,
             }
           : null
       return { ...r.track, audio }
@@ -201,6 +204,9 @@ export async function replacePlaylistTracks(
           spotifyUri: t.spotifyUri ?? null,
           deezerId: t.deezerId ?? null,
           localPath: t.localPath ?? null,
+          // The Plex track, so the detail page can join audio features and
+          // the nightly crawl knows which tracks are in playlists.
+          ratingKey: t.ratingKey ?? null,
           position: i,
         })),
       )

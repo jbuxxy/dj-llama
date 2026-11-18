@@ -1920,6 +1920,7 @@ function trackRowsToResolved(tracks: PlaylistTrackRow[]): ResolvedTrack[] {
     spotifyUri: t.spotifyUri ?? undefined,
     deezerId: t.deezerId ?? undefined,
     localPath: t.localPath ?? undefined,
+    plexRatingKey: t.ratingKey ?? undefined,
     source: 'local',
   }))
 }
@@ -1942,6 +1943,7 @@ async function saveEditedPlaylistTracks(
       spotifyUri: t.spotifyUri ?? null,
       deezerId: t.deezerId ?? null,
       localPath: t.localPath ?? null,
+      ratingKey: t.plexRatingKey ?? null,
       position: index,
     })),
   )

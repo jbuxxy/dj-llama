@@ -610,6 +610,13 @@
       "when": 1795006569545,
       "tag": "0086_plex_track_sonic",
       "breakpoints": true
+    },
+    {
+      "idx": 87,
+      "version": "7",
+      "when": 1795008150969,
+      "tag": "0087_plex_sonic_vocals_tempo_key",
+      "breakpoints": true
     }
   ]
 }

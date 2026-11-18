@@ -1,4 +1,4 @@
-import { inArray, sql } from 'drizzle-orm'
+import { eq, inArray, sql } from 'drizzle-orm'
 import type { Database } from '@/db'
 import { plexTrackSonic } from '@/db/schema'
 
@@ -32,8 +32,21 @@ export async function savePlexSonic(
         introSec: sql`excluded.intro_sec`,
         outroSec: sql`excluded.outro_sec`,
         moods: sql`excluded.moods`,
+        hasVocals: sql`excluded.has_vocals`,
+        bpm: sql`excluded.bpm`,
+        camelot: sql`excluded.camelot`,
         sonicAnalyzed: sql`excluded.sonic_analyzed`,
         fetchedAt: sql`excluded.fetched_at`,
       },
     })
+}
+
+/** Whether Plex has ever reported a vocal track -- i.e. its voice flag is live. */
+export async function anyVocalFlag(db: Database): Promise<boolean> {
+  const rows = await db
+    .select({ k: plexTrackSonic.ratingKey })
+    .from(plexTrackSonic)
+    .where(eq(plexTrackSonic.hasVocals, true))
+    .limit(1)
+  return rows.length > 0
 }

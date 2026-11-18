@@ -3,6 +3,7 @@ import {
   clearSonicNeighborCache,
   combinedEnergy,
   introSeconds,
+  keyToCamelot,
   moodLean,
   needsRefresh,
   outroSeconds,
@@ -59,17 +60,26 @@ describe('Plex energy', () => {
     expect(combinedEnergy(0.7, null)).toBe(0.7)
   })
   it('merges both sources into sequencing features', () => {
-    const f = sequenceFeaturesFor(undefined, {
+    const plex = {
       ratingKey: '1',
       loudness: -8,
       lra: 5,
       introSec: 1,
       outroSec: 4,
       moods: [],
+      hasVocals: null,
+      bpm: 128,
+      camelot: '8A',
       sonicAnalyzed: false,
       fetchedAt: new Date(),
-    })
-    expect(f?.bpm).toBeNull()
+    }
+    const f = sequenceFeaturesFor(undefined, plex)
+    // Plex's tempo/key fill in when we haven't analyzed the track...
+    expect(f?.bpm).toBe(128)
+    // ...but our own measurement wins when both exist.
+    const both = sequenceFeaturesFor({ bpm: 100, camelot: '1B', energy: 0.5 }, plex)
+    expect(both?.bpm).toBe(100)
+    expect(both?.camelot).toBe('1B')
     expect(f?.energy).toBeGreaterThan(0.5)
     expect(f?.outroSec).toBe(4)
     expect(sequenceFeaturesFor(undefined, undefined)).toBeNull()
@@ -77,13 +87,16 @@ describe('Plex energy', () => {
 })
 
 describe('refresh policy', () => {
-  const row = (sonicAnalyzed: boolean, ageDays: number, now: number) => ({
+  const row = (sonicAnalyzed: boolean, ageDays: number, now: number, complete = true) => ({
     ratingKey: '1',
     loudness: -8,
     lra: 5,
     introSec: null,
     outroSec: null,
     moods: [],
+    hasVocals: complete ? true : null,
+    bpm: complete ? 120 : null,
+    camelot: complete ? '8A' : null,
     sonicAnalyzed,
     fetchedAt: new Date(now - ageDays * 86_400_000),
   })
@@ -95,6 +108,11 @@ describe('refresh policy', () => {
     expect(needsRefresh(row(true, 10, now), now)).toBe(false)
     expect(needsRefresh(row(true, 31, now), now)).toBe(true)
   })
+  it('re-checks analyzed tracks weekly while Plex lacks their tempo/key/voice data', () => {
+    const now = Date.now()
+    expect(needsRefresh(row(true, 3, now, false), now)).toBe(false)
+    expect(needsRefresh(row(true, 8, now, false), now)).toBe(true)
+  })
 })
 
 describe('refreshPlexSonic', () => {
@@ -105,7 +123,11 @@ describe('refreshPlexSonic', () => {
   afterAll(async () => {
     await ctx?.close()
   })
-  const info = (ratingKey: string, sonicAnalyzed: boolean): PlexTrackSonicInfo => ({
+  const info = (
+    ratingKey: string,
+    sonicAnalyzed: boolean,
+    over: Partial<PlexTrackSonicInfo> = {},
+  ): PlexTrackSonicInfo => ({
     ratingKey,
     loudness: -9,
     lra: 6,
@@ -113,6 +135,11 @@ describe('refreshPlexSonic', () => {
     endRamp: END,
     moods: ['Lively'],
     sonicAnalyzed,
+    hasVoiceActivity: false,
+    bpm: null,
+    musicalKey: null,
+    unknownFields: [],
+    ...over,
   })
 
   it('stores Plex data and only fetches what is missing', async () => {
@@ -130,6 +157,48 @@ describe('refreshPlexSonic', () => {
     const out = await refreshPlexSonic(ctx.db as never, { getTrackSonicInfo }, ['a', 'zz'])
     expect(out.get('a')).toBeDefined()
     expect((await getPlexSonic(ctx.db as never, ['zz'])).size).toBe(0)
+  })
+
+  it("ignores Plex's voice flag until Plex reports a vocal track, then uses it", async () => {
+    const allFalse = vi.fn(async (keys: string[]) => keys.map((k) => info(k, true)))
+    const before = await refreshPlexSonic(ctx.db as never, { getTrackSonicInfo: allFalse }, ['v1'])
+    expect(before.get('v1')?.hasVocals).toBeNull()
+    const live = vi.fn(async (keys: string[]) =>
+      keys.map((k) => info(k, true, { hasVoiceActivity: k === 'v2' })),
+    )
+    const after = await refreshPlexSonic(ctx.db as never, { getTrackSonicInfo: live }, ['v2', 'v3'])
+    expect(after.get('v2')?.hasVocals).toBe(true)
+    expect(after.get('v3')?.hasVocals).toBe(false)
+  })
+
+  it('takes tempo and key from Plex when it provides them, and logs new fields', async () => {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const getTrackSonicInfo = vi.fn(async (keys: string[]) =>
+      keys.map((k) =>
+        info(k, true, { bpm: 124, musicalKey: 'F# minor', unknownFields: ['stream.newThing'] }),
+      ),
+    )
+    const out = await refreshPlexSonic(ctx.db as never, { getTrackSonicInfo }, ['t1'])
+    expect(out.get('t1')?.bpm).toBe(124)
+    expect(out.get('t1')?.camelot).toBe('11A')
+    expect(log.mock.calls.some((c) => String(c[0]).includes('stream.newThing'))).toBe(true)
+    log.mockRestore()
+  })
+})
+
+describe('keyToCamelot', () => {
+  it('reads Camelot codes and key names', () => {
+    expect(keyToCamelot('8A')).toBe('8A')
+    expect(keyToCamelot('08b')).toBe('8B')
+    expect(keyToCamelot('Am')).toBe('8A')
+    expect(keyToCamelot('C')).toBe('8B')
+    expect(keyToCamelot('C major')).toBe('8B')
+    expect(keyToCamelot('F# minor')).toBe('11A')
+    expect(keyToCamelot('Gbm')).toBe('11A')
+    expect(keyToCamelot('Bbmin')).toBe('3A')
+    expect(keyToCamelot('13A')).toBeNull()
+    expect(keyToCamelot('H')).toBeNull()
+    expect(keyToCamelot('C dorian')).toBeNull()
   })
 })
 

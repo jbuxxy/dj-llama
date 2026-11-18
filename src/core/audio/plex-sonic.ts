@@ -7,9 +7,12 @@
 //   - Gracenote mood tags ("Rousing", "Melancholy") -> energy hint
 //   - sonic neighbors (/nearest) once Plex Pass sonic analysis has run ->
 //     "these two sound alike", used as a transition cost
-// Plex has no BPM or musical key, so our own analysis (features.ts) still
-// supplies those. Plex's per-track voice flag is not used: it reads false
-// on obviously vocal tracks.
+//   - a voice-activity flag per track -> "Instrumental" badge. While the
+//     analysis is incomplete it reads false everywhere (even on vocal pop),
+//     so it's only trusted once Plex reports a vocal track somewhere.
+//   - tempo / musical key: not exposed as of PMS 1.43. The client reads the
+//     likely field names and logs any new field Plex starts sending; when
+//     present they fill in for tracks our own analysis hasn't reached.
 //
 // All of it is cheap metadata (no audio download), so it covers a whole
 // playlist at generation time. Sonic neighbors appear on their own as
@@ -17,7 +20,13 @@
 
 import type { PlexClient, PlexTrackSonicInfo } from '@/core/clients/plex'
 import type { Database } from '@/db'
-import { getPlexSonic, type StoredPlexSonic, savePlexSonic } from '@/db/queries/plex-sonic'
+import {
+  anyVocalFlag,
+  getPlexSonic,
+  type StoredPlexSonic,
+  savePlexSonic,
+} from '@/db/queries/plex-sonic'
+import { camelotFor } from './features'
 
 type Ramp = Array<{ db: number; sec: number }>
 
@@ -203,7 +212,36 @@ export function combinedEnergy(
   return audio ?? plex
 }
 
-export function toStored(info: PlexTrackSonicInfo): Omit<StoredPlexSonic, 'fetchedAt'> {
+const PITCHES: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11 }
+
+/** "8A", "Am", "F# minor", "Db major", "Bbmin" -> Camelot code; null if unreadable. */
+export function keyToCamelot(raw: string | null | undefined): string | null {
+  const k = raw?.trim()
+  if (!k) return null
+  const cam = k.match(/^0?(\d{1,2})\s*([AB])$/i)
+  if (cam) {
+    const n = Number(cam[1])
+    return n >= 1 && n <= 12 ? `${n}${(cam[2] as string).toUpperCase()}` : null
+  }
+  const m = k.match(/^([A-Ga-g])\s*(#|♯|b|♭)?\s*(.*)$/)
+  if (!m) return null
+  const base = PITCHES[(m[1] as string).toLowerCase()] as number
+  const acc = m[2] === '#' || m[2] === '♯' ? 1 : m[2] === 'b' || m[2] === '♭' ? -1 : 0
+  const rest = (m[3] ?? '').trim().toLowerCase()
+  const minor = rest === 'm' || rest.startsWith('min') || rest === 'minor'
+  if (!minor && rest !== '' && !rest.startsWith('maj')) return null
+  return camelotFor((base + acc + 12) % 12, minor ? 'minor' : 'major')
+}
+
+/**
+ * @param vocalsLive whether Plex's voice flag is real yet (it has reported
+ *   at least one vocal track); until then the flag is stored as unknown.
+ */
+export function toStored(
+  info: PlexTrackSonicInfo,
+  vocalsLive = false,
+): Omit<StoredPlexSonic, 'fetchedAt'> {
+  const bpm = info.bpm != null && info.bpm >= 40 && info.bpm <= 250 ? info.bpm : null
   return {
     ratingKey: info.ratingKey,
     loudness: info.loudness,
@@ -211,6 +249,9 @@ export function toStored(info: PlexTrackSonicInfo): Omit<StoredPlexSonic, 'fetch
     introSec: introSeconds(info.startRamp),
     outroSec: outroSeconds(info.endRamp),
     moods: info.moods.slice(0, 12),
+    hasVocals: vocalsLive ? info.hasVoiceActivity : null,
+    bpm,
+    camelot: keyToCamelot(info.musicalKey),
     sonicAnalyzed: info.sonicAnalyzed,
   }
 }
@@ -218,13 +259,29 @@ export function toStored(info: PlexTrackSonicInfo): Omit<StoredPlexSonic, 'fetch
 const DAY_MS = 24 * 60 * 60 * 1000
 // Loudness and moods rarely change; a track Plex hasn't sonically analyzed
 // yet is re-checked daily so neighbors switch on as the analysis progresses.
+// Analyzed tracks still missing tempo/key/voice data are re-checked weekly,
+// in case finishing the library's analysis adds them.
 const ANALYZED_TTL_MS = 30 * DAY_MS
+const INCOMPLETE_TTL_MS = 7 * DAY_MS
 const PENDING_TTL_MS = DAY_MS
 
 export function needsRefresh(row: StoredPlexSonic | undefined, now = Date.now()): boolean {
   if (!row) return true
   const age = now - row.fetchedAt.getTime()
-  return age > (row.sonicAnalyzed ? ANALYZED_TTL_MS : PENDING_TTL_MS)
+  if (!row.sonicAnalyzed) return age > PENDING_TTL_MS
+  const complete = row.bpm != null && row.camelot != null && row.hasVocals != null
+  return age > (complete ? ANALYZED_TTL_MS : INCOMPLETE_TTL_MS)
+}
+
+const reportedFields = new Set<string>()
+
+function reportNewFields(infos: PlexTrackSonicInfo[]): void {
+  const fresh = [...new Set(infos.flatMap((i) => i.unknownFields))].filter(
+    (f) => !reportedFields.has(f),
+  )
+  if (fresh.length === 0) return
+  for (const f of fresh) reportedFields.add(f)
+  console.log(`[plex-sonic] Plex sends track fields DJ Llama doesn't use yet: ${fresh.join(', ')}`)
 }
 
 /** Plex analysis data for these tracks, fetching what's missing or stale. */
@@ -239,7 +296,12 @@ export async function refreshPlexSonic(
   if (stale.length === 0) return stored
   try {
     const fresh = await client.getTrackSonicInfo(stale)
-    await savePlexSonic(db, fresh.map(toStored))
+    reportNewFields(fresh)
+    const vocalsLive = fresh.some((i) => i.hasVoiceActivity === true) || (await anyVocalFlag(db))
+    await savePlexSonic(
+      db,
+      fresh.map((i) => toStored(i, vocalsLive)),
+    )
   } catch (err) {
     // Stale data still orders a playlist fine; try again next time.
     console.warn('[plex-sonic] refresh failed:', err instanceof Error ? err.message : err)
@@ -314,8 +376,9 @@ export function sequenceFeaturesFor(
 } | null {
   if (!audio && !plex) return null
   return {
-    bpm: audio?.bpm ?? null,
-    camelot: audio?.camelot ?? null,
+    // Our analysis first (measured on this exact file); Plex's if it has them.
+    bpm: audio?.bpm ?? plex?.bpm ?? null,
+    camelot: audio?.camelot ?? plex?.camelot ?? null,
     energy: combinedEnergy(audio?.energy, plex ? plexEnergy(plex) : null),
     loudness: plex?.loudness ?? null,
     introSec: plex?.introSec ?? null,

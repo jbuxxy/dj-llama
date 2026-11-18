@@ -702,6 +702,12 @@ export const plexTrackSonic = pgTable('plex_track_sonic', {
   introSec: real('intro_sec'),
   outroSec: real('outro_sec'),
   moods: text('moods').array().notNull().default(sql`'{}'::text[]`),
+  // Null until Plex actually provides them: the voice flag is only trusted
+  // once Plex reports a vocal track somewhere (it reads false everywhere
+  // while analysis is incomplete), tempo/key once Plex exposes them.
+  hasVocals: boolean('has_vocals'),
+  bpm: real('bpm'),
+  camelot: text('camelot'),
   sonicAnalyzed: boolean('sonic_analyzed').notNull().default(false),
   fetchedAt: timestamp('fetched_at', { withTimezone: true }).defaultNow().notNull(),
 })
