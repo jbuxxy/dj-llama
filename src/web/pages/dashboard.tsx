@@ -8,6 +8,7 @@ import { AlbumPicker } from '../components/album-picker'
 import { ArtistThumb } from '../components/artist-thumb'
 import { GenreCoverageSummary } from '../components/genre-coverage-summary'
 import { Hint } from '../components/hint'
+import { ListeningOutcomes } from '../components/listening-outcomes'
 import type { MonitorOption } from '../components/monitoring-options'
 import { PagerBar } from '../components/pager-bar'
 import { PipelineProgress } from '../components/pipeline-progress'
@@ -25,6 +26,7 @@ import {
   getAuthStatus,
   getDashboardActivity,
   getDashboardGenreCoverage,
+  getDashboardOutcomes,
   getDashboardTaste,
   getRecentTracks,
   getRecommendations,
@@ -564,6 +566,11 @@ export function Dashboard() {
   })
 
   // Activity
+  const { data: outcomesData, isLoading: outcomesLoading } = useQuery({
+    queryKey: queryKeys.dashboard.outcomes,
+    queryFn: getDashboardOutcomes,
+    staleTime: 5 * 60_000,
+  })
   const { data: activityData, isLoading: activityLoading } = useQuery({
     queryKey: queryKeys.dashboard.activity,
     queryFn: () => getDashboardActivity(5),
@@ -795,6 +802,19 @@ export function Dashboard() {
           recs={approvedRecs}
           loading={approvedLoading || approvedRequestsLoading}
         />
+      </CollapsibleCard>
+
+      <CollapsibleCard
+        id="dashboard-outcomes"
+        title="Did It Stick?"
+        headerExtra={
+          <Hint id="dashboard-outcomes-tip" type="inline">
+            After an approval lands in your library, DJ Llama watches your Plex plays for a month.
+            Keepers and never-played picks feed back into future scoring.
+          </Hint>
+        }
+      >
+        <ListeningOutcomes data={outcomesData} loading={outcomesLoading} />
       </CollapsibleCard>
 
       {/* Artist History + Recently Played, sharing one range filter */}

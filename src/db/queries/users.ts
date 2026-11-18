@@ -7,10 +7,12 @@ import type { Cursor } from '@/server/helpers/pagination-cursor'
 
 type UserRow = typeof users.$inferSelect
 
-export type UserPublic = Omit<UserRow, 'passwordHash'>
+// learnedWeights is internal scoring state with its own accessor
+// (db/queries/outcomes.ts) -- kept out of the user object routes pass around.
+export type UserPublic = Omit<UserRow, 'passwordHash' | 'learnedWeights'>
 
 function toPublic(row: UserRow): UserPublic {
-  const { passwordHash: _, ...rest } = row
+  const { passwordHash: _, learnedWeights: __, ...rest } = row
   return rest
 }
 

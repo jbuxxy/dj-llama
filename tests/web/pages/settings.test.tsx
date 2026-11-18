@@ -80,6 +80,7 @@ vi.mock('@/web/lib/api', () => ({
   updateRecommendation: vi.fn().mockResolvedValue({}),
   getRecentListens: vi.fn().mockResolvedValue({ tracks: [] }),
   getDashboardTaste: vi.fn().mockResolvedValue([]),
+  getDashboardOutcomes: vi.fn().mockResolvedValue(null),
   getDashboardActivity: vi.fn().mockResolvedValue([]),
   getJobHealth: vi.fn().mockResolvedValue({
     discovery: {

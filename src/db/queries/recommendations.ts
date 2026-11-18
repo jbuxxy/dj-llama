@@ -331,8 +331,12 @@ export async function getGenreFeedbackHistory(
   const result = await db.execute(sql`
     SELECT
       genre,
-      COUNT(*)::int AS total,
-      COUNT(CASE WHEN r.status IN ('approved', 'added_to_lidarr') THEN 1 END)::int AS approved,
+      -- Listening outcomes sharpen the approve rate: a keeper counts as a
+      -- second approval, an approval that was never played as half a rejection.
+      (COUNT(*) + COUNT(*) FILTER (WHERE r.outcome = 'keeper')
+        + 0.5 * COUNT(*) FILTER (WHERE r.outcome = 'unplayed'))::float AS total,
+      (COUNT(CASE WHEN r.status IN ('approved', 'added_to_lidarr') THEN 1 END)
+        + COUNT(*) FILTER (WHERE r.outcome = 'keeper'))::float AS approved,
       COUNT(CASE WHEN r.status = 'rejected'
                   AND r.rejection_reason IN ('tried_didnt_like', 'wrong_style')
                  THEN 1 END)::int AS strong_negative

@@ -123,6 +123,11 @@ export const users = pgTable(
     // plus an AI call (for the title/reasoning) on every page view.
     tasteProfileCache: jsonb('taste_profile_cache').$type<TasteProfileCache>(),
     tasteProfileCachedAt: timestamp('taste_profile_cached_at', { withTimezone: true }),
+    // Scoring weights fitted to this user's recommendation outcomes (see
+    // core/listening/learn-weights.ts). Kept out of `preferences` so writing
+    // them never turns an inherit-global user into a custom-preferences one;
+    // used only when preferences.autoTuneWeights is on.
+    learnedWeights: jsonb('learned_weights').$type<LearnedWeights>(),
   },
   (table) => ({
     emailUniqueIdx: uniqueIndex('users_email_unique_idx')
@@ -314,6 +319,13 @@ export const recommendations = pgTable(
     // actually arrived. Null = not yet confirmed; layered on top of status
     // as a separate "In Library" badge rather than replacing it.
     libraryConfirmedAt: timestamp('library_confirmed_at', { withTimezone: true }),
+    // Did it stick? Set by the nightly outcome job (core/listening/outcomes.ts)
+    // from the user's plays in the window after libraryConfirmedAt. Null =
+    // not confirmed yet, or still inside the window without becoming a keeper.
+    outcome: text('outcome').$type<RecommendationOutcome>(),
+    outcomePlays: integer('outcome_plays'),
+    outcomeSkipRate: real('outcome_skip_rate'),
+    outcomeAt: timestamp('outcome_at', { withTimezone: true }),
   },
   (table) => ({
     batchIdx: index('recommendations_batch_idx').on(table.batchId),
@@ -656,6 +668,14 @@ export const listeningEvents = pgTable(
   }),
 )
 
+export type RecommendationOutcome = 'keeper' | 'tried' | 'unplayed'
+
+export type LearnedWeights = {
+  weights: ScoringWeights
+  samples: number
+  fittedAt: string
+}
+
 export type PlaylistConfig = {
   size: number // default 25
   genre?: string // for genre_focus strategy
@@ -761,6 +781,10 @@ export type Preferences = {
   // Dashboard cards the user has manually collapsed (by section id, e.g.
   // 'dashboard-recently-approved') -- absent/not-listed = expanded.
   collapsedDashboardSections?: string[]
+  // Score with the weights fitted to this user's listening outcomes
+  // (users.learned_weights) instead of scoringWeights, once enough outcomes
+  // exist. Absent/false = manual weights.
+  autoTuneWeights?: boolean
 }
 
 export type ScoringWeights = Preferences['scoringWeights']

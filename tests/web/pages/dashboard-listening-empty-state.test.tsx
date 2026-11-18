@@ -54,6 +54,7 @@ vi.mock('@/web/lib/api', () => ({
     source: null,
   })),
   getDashboardTaste: vi.fn(async () => []),
+  getDashboardOutcomes: vi.fn(async () => null),
   getDashboardGenreCoverage: vi.fn(async () => null),
   getDashboardActivity: vi.fn(async () => []),
   triggerPipeline: vi.fn(),

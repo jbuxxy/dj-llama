@@ -1,4 +1,5 @@
 import type { DiscoveredArtist, ScoredArtist } from '@/core/types'
+import type { Preferences } from '@/db/schema'
 import type { GenreFeedback } from './score'
 
 // Minimal database interface - only what store() needs
@@ -59,6 +60,11 @@ export interface StoreDb {
   } | null>
 
   getPopularityMap?: () => Promise<Map<string, number>>
+  // Weights fitted to the user's listening outcomes (users.learned_weights),
+  // applied when preferences.autoTuneWeights is on. Optional for mocks.
+  getLearnedWeights?: (
+    userId: number,
+  ) => Promise<{ weights: Preferences['scoringWeights']; samples: number } | null>
 
   getLibraryArtistsForUser?: (
     userId: number,

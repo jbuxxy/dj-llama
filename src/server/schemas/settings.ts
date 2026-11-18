@@ -83,6 +83,7 @@ export const preferencesSchema = z.object({
   webhookUrl: z.string().optional(),
   lidarrPublicUrl: z.string().optional(),
   autoApproveEnabled: z.boolean().optional(),
+  autoTuneWeights: z.boolean().optional(),
   autoApproveThreshold: z.number().min(0).max(1).optional(),
   autoApproveMonitorOption: z.enum(['recommended', 'all', 'new']).optional(),
   playlistSize: z.number().int().min(1).optional(),

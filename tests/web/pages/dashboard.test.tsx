@@ -60,6 +60,7 @@ vi.mock('@/web/lib/api', () => ({
   getTopArtists: vi.fn(),
   getRecentTracks: vi.fn(),
   getDashboardTaste: vi.fn(),
+  getDashboardOutcomes: vi.fn(async () => null),
   getDashboardGenreCoverage: vi.fn(),
   getDashboardActivity: vi.fn(),
   triggerPipeline: vi.fn(),

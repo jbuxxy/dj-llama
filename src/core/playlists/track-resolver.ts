@@ -53,10 +53,15 @@ const LIKED_RATING_THRESHOLD = 8
 // Every track keeps a nonzero base weight so the pick still varies across
 // regenerations, but liked and heavily-played tracks are meaningfully more
 // likely to be chosen over an artist's deep cuts.
-function localTrackWeight(track: LocalTrack): number {
+// A track the user keeps skipping stays possible but much less likely.
+const SKIP_RATE_THRESHOLD = 0.5
+const SKIPPED_TRACK_FACTOR = 0.3
+
+export function localTrackWeight(track: LocalTrack): number {
   let weight = 1
   if ((track.userRating ?? 0) >= LIKED_RATING_THRESHOLD) weight += 4
   weight += Math.min(track.viewCount ?? 0, 20) * 0.2
+  if ((track.skipRate ?? 0) > SKIP_RATE_THRESHOLD) weight *= SKIPPED_TRACK_FACTOR
   return weight
 }
 

@@ -39,6 +39,7 @@ const ALLOWED_PREF_KEYS = new Set([
   'scheduleCron',
   'webhookUrl',
   'autoApproveEnabled',
+  'autoTuneWeights',
   'autoApproveThreshold',
   'autoApproveMonitorOption',
   'dismissedHints',

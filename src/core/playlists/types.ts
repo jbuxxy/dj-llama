@@ -32,6 +32,8 @@ export type LocalTrack = {
   duration?: number
   userRating?: number
   viewCount?: number
+  /** This user's recent skip share for the track (0..1), from listening_events; absent = no data. */
+  skipRate?: number
 }
 
 export type MBRecording = {

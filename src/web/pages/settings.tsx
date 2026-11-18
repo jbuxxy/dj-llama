@@ -40,6 +40,7 @@ import { Skeleton } from '../components/ui/skeleton'
 import {
   ApiError,
   getCurrentUser,
+  getDashboardOutcomes,
   getLidarrMetadataProfiles,
   getLidarrProfiles,
   getLidarrRootFolders,
@@ -51,6 +52,7 @@ import {
   updateSettings,
   updateUserPreferences,
 } from '../lib/api'
+import { queryKeys } from '../lib/query-keys'
 
 // Heavier admin tabs load on demand so opening Settings only pulls in the
 // tab you're looking at (charts in Analytics, the health checks, etc.).
@@ -1848,6 +1850,14 @@ function DiscoveryTabInner({
       ? prefs.autoApproveMonitorOption
       : 'recommended',
   )
+  const [autoTuneWeights, setAutoTuneWeights] = useState(
+    (prefs.autoTuneWeights as boolean | undefined) ?? false,
+  )
+  const { data: outcomes } = useQuery({
+    queryKey: queryKeys.dashboard.outcomes,
+    queryFn: getDashboardOutcomes,
+    staleTime: 5 * 60_000,
+  })
   const [saving, setSaving] = useState(false)
 
   const pickiness =
@@ -1874,6 +1884,7 @@ function DiscoveryTabInner({
         autoApproveThreshold,
         autoApproveMonitorOption: autoApproveMonitorOption as 'recommended' | 'all' | 'new',
         historySourcesEnabled: { plex: plexHistoryEnabled },
+        autoTuneWeights,
       })
       queryClient.invalidateQueries({ queryKey: ['user-preferences'] })
       toast.success('Discovery preferences saved')
@@ -1919,6 +1930,20 @@ function DiscoveryTabInner({
             help="Also seed discovery from artists you already own, not just what you listen to."
           >
             <Toggle checked={libraryMix} onChange={setLibraryMix} label="Mix in your library" />
+          </SettingRow>
+          <SettingRow
+            label="Learn from what you keep playing"
+            help={
+              outcomes?.learned
+                ? `Rank picks by what predicted your keepers, fitted from ${outcomes.learned.samples} past picks.`
+                : `Rank picks by what predicted your keepers. Starts once ${outcomes?.rules.minSamples ?? 20} approvals have been judged (${outcomes ? outcomes.summary.keepers + outcomes.summary.tried + outcomes.summary.unplayed : 0} so far).`
+            }
+          >
+            <Toggle
+              checked={autoTuneWeights}
+              onChange={setAutoTuneWeights}
+              label="Learn from what you keep playing"
+            />
           </SettingRow>
           <SettingRow
             label="Hide rejected artists for"

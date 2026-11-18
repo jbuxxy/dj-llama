@@ -1022,6 +1022,35 @@ export type ActivityEntry = {
 
 export const getDashboardTaste = () => fetchApi<TasteProfile>('/dashboard/taste')
 
+export type OutcomeItem = {
+  id: number
+  artistId: number
+  artistName: string
+  artistMbid: string
+  imageUrl: string | null
+  albumTitle: string | null
+  kind: string
+  plays: number
+  outcomeAt: string | null
+}
+export type ScoringWeightSet = {
+  consensus: number
+  similarity: number
+  genreOverlap: number
+  aiConfidence: number
+  feedbackBoost: number
+  popularity: number
+}
+export type DashboardOutcomes = {
+  summary: { keepers: number; tried: number; unplayed: number; pending: number }
+  hitRate: number | null
+  keepers: OutcomeItem[]
+  unplayed: OutcomeItem[]
+  learned: { weights: ScoringWeightSet; samples: number; fittedAt: string } | null
+  rules: { windowDays: number; keeperPlays: number; keeperDays: number; minSamples: number }
+}
+export const getDashboardOutcomes = () => fetchApi<DashboardOutcomes>('/dashboard/outcomes')
+
 export const getDashboardGenreCoverage = () =>
   fetchApi<GenreCoverage | null>('/dashboard/genre-coverage')
 

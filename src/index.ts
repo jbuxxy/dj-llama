@@ -46,6 +46,7 @@ import { createLibrarySyncStore } from './core/library/store'
 import { createSyncOrchestrator, type SyncOrchestrator } from './core/library/sync'
 import { markShuttingDown } from './core/lifecycle'
 import { backfillPlexHistory } from './core/listening/history-backfill'
+import { updateUserOutcomes } from './core/listening/outcomes'
 import { dispatch } from './core/notifications'
 import { CronScheduler } from './core/ops/cron-scheduler'
 import { isMaintenance, setMaintenance } from './core/ops/maintenance'
@@ -136,7 +137,8 @@ import {
   saveLibraryHealthState,
 } from './db/queries/library-health'
 import { getCachedLidarrIds } from './db/queries/lidarr-cache'
-import { getRecentPlays } from './db/queries/listening-events'
+import { getRecentPlays, getTrackSkipStats } from './db/queries/listening-events'
+import { getLearnedWeights } from './db/queries/outcomes'
 import {
   deletePlaylistMissingTrack,
   fillMissingTrackCovers,
@@ -309,6 +311,7 @@ const storeDb: StoreDb = {
   getFeedbackHistory: (userId) => getGenreFeedbackHistory(db, userId),
   lookupArtistMetadata: (name) => lookupByName(db, name),
   getPopularityMap: () => getPopularityMap(db),
+  getLearnedWeights: (userId) => getLearnedWeights(db, userId),
   getLibraryArtistsForUser: async (userId, options) => {
     const conds = [or(eq(libraryArtists.userId, userId), isNull(libraryArtists.userId))]
     if (options?.onlyReconciled) conds.push(isNotNull(libraryArtists.mbid))
@@ -665,6 +668,9 @@ async function getEnabledTargets(): Promise<import('./core/targets/types').Desti
   return targets
 }
 
+// How far back track skips count against a track in playlist picks.
+const SKIP_WINDOW_MS = 180 * 24 * 60 * 60 * 1000
+
 async function buildPlaylistResolverDeps(userId: number | null) {
   const mbClient = createMusicBrainzClient()
   const deezerClient = createDeezerClient()
@@ -685,7 +691,21 @@ async function buildPlaylistResolverDeps(userId: number | null) {
       })
       // "local" here means the user's own Plex library, not a public catalog
       // -- this is what guarantees playlist tracks are actually owned.
-      resolverDeps.plexSearch = (artistName) => plexClient.getTracksForArtist(artistName)
+      resolverDeps.plexSearch = async (artistName) => {
+        const tracks = await plexClient.getTracksForArtist(artistName)
+        const keys = tracks.map((t) => t.ratingKey).filter((k): k is string => !!k)
+        const stats = await getTrackSkipStats(
+          db,
+          userId,
+          keys,
+          new Date(Date.now() - SKIP_WINDOW_MS),
+        )
+        return tracks.map((t) => {
+          const st = t.ratingKey ? stats.get(t.ratingKey) : undefined
+          // Two plays minimum, so one accidental skip doesn't bury a track.
+          return st && st.plays >= 2 ? { ...t, skipRate: st.skips / st.plays } : t
+        })
+      }
       resolverDeps.plexTitleSearch = (query) => plexClient.searchTracksByTitle(query)
     }
   }
@@ -2339,6 +2359,20 @@ let stuckDetectorCron: Cron | null = null
 let jobRetentionCron: Cron | null = null
 let listeningBackfillCron: Cron | null = null
 
+// Nightly, after the history backfill: label recommendations that stuck (or
+// didn't) and refit each user's learned scoring weights.
+async function updateAllOutcomes(): Promise<void> {
+  for (const user of await listUsers(db)) {
+    try {
+      const { labeled, samples } = await updateUserOutcomes(db, user.id)
+      if (labeled > 0)
+        console.log(`[outcomes] user ${user.id}: labeled ${labeled}, ${samples} training sample(s)`)
+    } catch (err) {
+      console.warn(`[outcomes] user ${user.id} failed:`, errMsg(err))
+    }
+  }
+}
+
 // Nightly: pull each Plex user's play history into listening_events (see
 // core/listening/history-backfill.ts). Sequential -- it's a handful of
 // paged history calls per user, and Plex's history endpoint is slow.
@@ -2812,6 +2846,7 @@ const server = serve({ fetch: app.fetch, port })
     listeningBackfillCron = new Cron('37 4 * * *', async () => {
       if (isMaintenance()) return
       await backfillListeningHistory()
+      await updateAllOutcomes()
     })
     // First run soon after boot, so a fresh install has history before the night.
     setTimeout(() => {

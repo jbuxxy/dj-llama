@@ -99,6 +99,10 @@ const mockRecommendation = {
   actedOnAt: null,
   createdAt: new Date('2024-01-01'),
   libraryConfirmedAt: null,
+  outcome: null,
+  outcomePlays: null,
+  outcomeSkipRate: null,
+  outcomeAt: null,
   artist: mockArtist,
 }
 

@@ -4,6 +4,7 @@ import { createLastFmClient } from '@/core/clients/lastfm'
 import { createMusicBrainzClient, runInBackgroundLane } from '@/core/clients/musicbrainz'
 import { decryptChannelSecrets } from '@/core/crypto'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
+import { effectiveWeights } from '@/core/listening/learn-weights'
 import { dispatch, logDispatchFailures } from '@/core/notifications'
 import { createPlexSource } from '@/core/plugins/plex'
 import { LISTENING_SOURCE_IDS, SourceRegistry } from '@/core/plugins/registry'
@@ -575,10 +576,12 @@ export class PipelineOrchestrator extends EventEmitter {
       const popularityMap = (await db.getPopularityMap?.()) ?? new Map<string, number>()
       const referenceGenres =
         libraryGenres.length > 0 ? libraryGenres : tasteProfile.topGenres.map((g) => g.name)
+      const learned =
+        deps.userId != null ? ((await db.getLearnedWeights?.(deps.userId)) ?? null) : null
       const scored = score(
         resolved,
         referenceGenres,
-        prefs.scoringWeights,
+        effectiveWeights(prefs, learned),
         feedbackHistory,
         popularityMap,
       )

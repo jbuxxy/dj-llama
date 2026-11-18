@@ -1,4 +1,7 @@
 import { Hono } from 'hono'
+import { MIN_SAMPLES } from '@/core/listening/learn-weights'
+import { KEEPER_DAYS, KEEPER_PLAYS, OUTCOME_WINDOW_DAYS } from '@/core/listening/outcomes'
+import { getLearnedWeights, getOutcomeSummary, listByOutcome } from '@/db/queries/outcomes'
 import type { AppDependencies } from '@/server'
 import { parseOptionalClampedInt } from '@/server/helpers/parse-int-clamp'
 import { apiError } from '@/server/helpers/problem'
@@ -31,6 +34,33 @@ export function dashboardRoutes(deps: AppDependencies) {
 
     const activity = await deps.dashboardQueries.getRecentActivity(userId, isAdmin, limit)
     return c.json(activity)
+  })
+
+  // "Did it stick?" -- how this user's approvals turned out once they landed
+  // in the library (core/listening/outcomes.ts), plus the learned weights.
+  router.get('/api/v1/dashboard/outcomes', async (c) => {
+    const userId = c.get('userId')
+    if (userId == null) return apiError(c, 400, 'A user session is required')
+    const [summary, keepers, unplayed, learned] = await Promise.all([
+      getOutcomeSummary(deps.db, userId),
+      listByOutcome(deps.db, userId, 'keeper'),
+      listByOutcome(deps.db, userId, 'unplayed'),
+      getLearnedWeights(deps.db, userId),
+    ])
+    const decided = summary.keepers + summary.tried + summary.unplayed
+    return c.json({
+      summary,
+      hitRate: decided > 0 ? summary.keepers / decided : null,
+      keepers,
+      unplayed,
+      learned,
+      rules: {
+        windowDays: OUTCOME_WINDOW_DAYS,
+        keeperPlays: KEEPER_PLAYS,
+        keeperDays: KEEPER_DAYS,
+        minSamples: MIN_SAMPLES,
+      },
+    })
   })
 
   return router

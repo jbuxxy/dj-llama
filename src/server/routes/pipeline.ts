@@ -5,6 +5,7 @@ import { getSharedLidarrClient } from '@/core/clients/lidarr'
 import { createMusicBrainzClient } from '@/core/clients/musicbrainz'
 import { activityTracker } from '@/core/jobs/activity'
 import { recordFailureSafely } from '@/core/jobs/record-failure-safely'
+import { effectiveWeights } from '@/core/listening/learn-weights'
 import { artistPicksToTracks } from '@/core/pipeline/discover-tracks'
 import { filter } from '@/core/pipeline/filter'
 import { createArtistImageClients } from '@/core/pipeline/image-clients'
@@ -324,7 +325,10 @@ export function pipelineRoutes(deps: AppDependencies) {
         const feedbackHistory = quickDiscoverUserId
           ? await deps.storeDb.getFeedbackHistory(quickDiscoverUserId)
           : await deps.storeDb.getFeedbackHistory()
-        const scored = score(resolved, [], prefs.scoringWeights, feedbackHistory)
+        const learned = quickDiscoverUserId
+          ? ((await deps.storeDb.getLearnedWeights?.(quickDiscoverUserId)) ?? null)
+          : null
+        const scored = score(resolved, [], effectiveWeights(prefs, learned), feedbackHistory)
         const existingMbids = await deps.storeDb.getExistingRecommendationMbids(quickDiscoverUserId)
         for (const mbid of existingMbids) libraryMbids.add(mbid)
 

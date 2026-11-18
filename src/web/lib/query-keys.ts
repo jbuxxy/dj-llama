@@ -20,6 +20,8 @@ export const queryKeys = {
     recs: ['recommendations', 'dashboard'] as const,
     pick: ['recommendations', 'dashboard', 'pick'] as const,
     approved: ['recommendations', 'dashboard', 'approved'] as const,
+    /** "Did it stick?" -- listening outcomes of approved recommendations. */
+    outcomes: ['recommendations', 'dashboard', 'outcomes'] as const,
     activity: ['dashboard', 'activity'] as const,
     taste: ['dashboard', 'taste'] as const,
     genreCoverage: ['dashboard', 'genre-coverage'] as const,
