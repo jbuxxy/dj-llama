@@ -359,18 +359,21 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
                 <img src="/icon.png" alt="" width="28" height="28" />
                 DJ LLAMA
               </NavLink>
-              {/* Desktop nav links - grouped */}
-              <div className="hidden sm:flex items-center gap-4">
-                <NavLink to="/" end className={navLinkClass}>
+              {/* Desktop nav links - grouped. Shown from md (where BottomNav
+                  hides); icon-only until lg so the bar never wraps on
+                  mid-width screens (tablets, car browsers). Taste Map is
+                  also in the user menu, so it only joins the bar at xl. */}
+              <div className="hidden md:flex items-center gap-4 whitespace-nowrap">
+                <NavLink to="/" end className={navLinkClass} title="Dashboard">
                   <span className="flex items-center gap-1">
                     <LayoutDashboard size={14} aria-hidden="true" />
-                    Dashboard
+                    <span className="sr-only lg:not-sr-only">Dashboard</span>
                   </span>
                 </NavLink>
-                <NavLink to="/requests" className={navLinkClass}>
+                <NavLink to="/requests" className={navLinkClass} title="Search">
                   <span className="flex items-center gap-1">
                     <Search size={14} aria-hidden="true" />
-                    Search
+                    <span className="sr-only lg:not-sr-only">Search</span>
                     {pendingRequestsCount > 0 && (
                       <span className="ml-0.5 min-w-4 px-1 h-4 rounded-full bg-accent text-accent-fg text-micro-sm leading-4 text-center font-semibold">
                         {pendingRequestsCount}
@@ -378,23 +381,27 @@ function AppShell({ children, aiRequired }: { children: React.ReactNode; aiRequi
                     )}
                   </span>
                 </NavLink>
-                <NavLink to="/discover" end className={navLinkClass}>
+                <NavLink to="/discover" end className={navLinkClass} title="Discover">
                   <span className="flex items-center gap-1">
                     <Compass size={14} aria-hidden="true" />
-                    Discover
+                    <span className="sr-only lg:not-sr-only">Discover</span>
                     {aiRequired && <Lock size={11} className="text-muted" aria-hidden="true" />}
                   </span>
                 </NavLink>
-                <NavLink to="/playlists" className={navLinkClass}>
+                <NavLink to="/playlists" className={navLinkClass} title="Playlists">
                   <span className="flex items-center gap-1">
                     <ListMusic size={14} aria-hidden="true" />
-                    Playlists
+                    <span className="sr-only lg:not-sr-only">Playlists</span>
                   </span>
                 </NavLink>
-                <NavLink to="/taste-map" className={navLinkClass}>
+                <NavLink
+                  to="/taste-map"
+                  className={(a) => `hidden xl:block ${navLinkClass(a)}`}
+                  title="Taste Map"
+                >
                   <span className="flex items-center gap-1">
                     <MapIcon size={14} aria-hidden="true" />
-                    Taste Map
+                    <span className="sr-only lg:not-sr-only">Taste Map</span>
                   </span>
                 </NavLink>
               </div>
