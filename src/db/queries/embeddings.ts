@@ -68,10 +68,12 @@ export type EmbeddingRow = {
 }
 
 export async function upsertEmbeddings(db: Database, rows: EmbeddingRow[]): Promise<void> {
-  if (rows.length === 0) return
+  // Last row per key wins: Postgres rejects an ON CONFLICT DO UPDATE that touches a row twice
+  const unique = [...new Map(rows.map((r) => [r.key, r])).values()]
+  if (unique.length === 0) return
   await db
     .insert(artistEmbeddings)
-    .values(rows.map((r) => ({ ...r, updatedAt: new Date() })))
+    .values(unique.map((r) => ({ ...r, updatedAt: new Date() })))
     .onConflictDoUpdate({
       target: artistEmbeddings.key,
       set: {

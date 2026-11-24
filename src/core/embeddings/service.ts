@@ -136,7 +136,11 @@ export function createEmbeddingService(deps: {
       const handle = await deps.getProvider()
       if (!handle?.provider.embed || candidates.length === 0) return out
       let index = await getEmbeddingIndex(db, handle.model)
-      const missing = candidates.filter((c) => !index.vectorOf(`mbid:${c.mbid}`))
+      // One entry per MBID: the same artist can arrive from several seeds, and a
+      // repeated key in one upsert fails the whole statement in Postgres
+      const missing = [...new Map(candidates.map((c) => [c.mbid, c])).values()].filter(
+        (c) => !index.vectorOf(`mbid:${c.mbid}`),
+      )
       if (missing.length > 0) {
         const sources = missing.map((c) => ({
           name: c.name,
